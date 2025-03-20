@@ -1,0 +1,38 @@
+library(Seurat)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(sctransform)
+library(scDblFinder)
+library(gridExtra)
+library(here)
+library(hdf5r)
+here()
+
+##### Import pre-cellbender count matrix to estimate correct cell number parameters for use with Cellbender ######
+# A1.data <- ReadMtx(mtx = "/external1/RT/scs/processing/cross_tissue_immune_atlas/head_kidney/A1/starsolo/Solo.out/GeneFull_Ex50pAS/raw/UniqueAndMult-EM.mtx", 
+#                      cells = "/external1/RT/scs/processing/cross_tissue_immune_atlas/head_kidney/A1/starsolo/Solo.out/GeneFull_Ex50pAS/raw/barcodes.tsv", 
+#                      features = "/external1/RT/scs/processing/cross_tissue_immune_atlas/head_kidney/A1/starsolo/Solo.out/GeneFull_Ex50pAS/raw/features.tsv",feature.column = 1)
+# 
+# #Plot counts per cell (as in CellRanger web_summary.html)
+# counts_per_cell <- Matrix::colSums(A1.data) # Genes/cell is Matrix::colSums(A1@assays$RNA@counts > 0)
+# counts_per_cell <- counts_per_cell[counts_per_cell >= 15]
+# counts_per_cell <- as.data.frame(sort(counts_per_cell,decreasing = TRUE))
+# names(counts_per_cell) <- "count"
+# counts_per_cell["rank"] <- row(counts_per_cell)
+# 
+# #Modify these cellbender parameteres
+# expected.cells <-8000
+# total.droplets.included <-40000
+# low.count.threshold = 200
+# 
+# ggplot(counts_per_cell, aes(x=rank, y=count)) + geom_point() + 
+#   geom_vline(xintercept = expected.cells,col = "blue") +
+#   geom_vline(xintercept = total.droplets.included,col = "red") + 
+#   scale_y_continuous(limits = c(1,max(counts_per_cell$counts)),trans = "log10") + #Set x limits
+#   scale_x_continuous(limits = c(3,max(counts_per_cell$rank)),trans = "log10") + #Set x limits
+#   geom_hline(yintercept = low.count.threshold,col = "purple")
+
+#Now run Cellbender using above estimates of cell numbers
