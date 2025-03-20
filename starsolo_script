@@ -1,0 +1,44 @@
+ulimit -n 30000
+
+STAR \
+--runMode alignReads \
+--runThreadN 33 \
+--genomeDir /cluster/work/users/adrianamsa/isav_glesvaer_ssalar/starIndexSSisav_2023_149 \
+--sjdbOverhang 149 \
+--readFilesIn \
+/cluster/work/users/adrianamsa/snuc_raw/JF_010223/outs/fastq_path/AAAWJ57HV/A1_S1_L002_R2_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/JF_010223/outs/fastq_path/AAAWJ57HV/A1_S1_L001_R2_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/E222480_JF_Data_270223.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/E222480_JF_Data_270223.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/E222480_AMSA_Data_240523/outs/fastq_path/AAC2LYFHV/A1_S1_L002_R2_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/E222480_AMSA_Data_240523/outs/fastq_path/AAC2LYFHV/A1_S1_L001_R2_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/AMSA_020623.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/AMSA_020623.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz\
+/cluster/work/users/adrianamsa/snuc_raw/JF_010223/outs/fastq_path/AAAWJ57HV/A1_S1_L002_R1_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/JF_010223/outs/fastq_path/AAAWJ57HV/A1_S1_L001_R1_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/E222480_JF_Data_270223.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/E222480_JF_Data_270223.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/E222480_AMSA_Data_240523/outs/fastq_path/AAC2LYFHV/A1_S1_L002_R1_001.fastq.gz,\
+/cluster/work/users/adrianamsa/snuc_raw/E222480_AMSA_Data_240523/outs/fastq_path/AAC2LYFHV/A1_S1_L001_R1_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/AMSA_020623.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz, \
+/cluster/work/users/adrianamsa/snuc_raw/AMSA_020623.tar.gz/outs/fastq_path/ /A1_S1_L002_R1_001.fastq.gz\
+--readFilesCommand zcat \
+--outSAMtype BAM SortedByCoordinate \
+--outSAMmode Full \
+--outSAMattributes GX CB UB \
+--soloType CB_UMI_Simple \
+--soloCBwhitelist /cluster/work/users/adrianamsa/files \
+--clipAdapterType CellRanger4 \
+--soloFeatures GeneFull_Ex50pAS GeneFull Gene Velocyto \
+--soloUMIdedup 1MM_CR \
+--outFilterMatchNmin 40 \
+--outFilterScoreMin 40 \
+--soloCBstart 1 \
+--soloCBlen 16 \
+--soloUMIstart 17 \
+--soloUMIlen 10 \
+--soloBarcodeReadLength 0 \
+--soloUMIfiltering MultiGeneUMI_CR \
+--soloCellFilter EmptyDrops_CR \
+--soloMultiMappers EM \
+--limitOutSJcollapsed 10000000
