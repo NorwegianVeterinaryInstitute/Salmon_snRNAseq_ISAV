@@ -1,0 +1,252 @@
+#Script was run for each of the samples separated.
+
+library(Seurat)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(cowplot)
+library(Matrix)
+library(sctransform)
+library(scDblFinder)
+library(gridExtra)
+library(here)
+library(hdf5r)
+here()
+
+#Load gene table and functions
+source(here::here("scripts","general","AnnotateCluster_2.R")) # AnnotateClusters()
+look.up.table <- read.csv(here::here("scripts","general","s_salar_ensembl_106_gene_data_added.csv"),header = T)
+
+#Read in matrices - use post Cellbender filtered count matrix
+#here we choose the FDR result
+A1.data <- Read10X_h5(here::here("data","cellbender","A1","a1_post_cellbender_FPR_0.05_filtered.h5"),use.names = FALSE)
+A1 <- CreateSeuratObject(counts = A1.data,min.cells = 5,min.features = 0,project = "A1",)
+
+#Add meta data on condition and datasource
+A1@meta.data[,"dataset"] <- "A1"
+A1@meta.data[,"condition"] <- "Control"
+
+#Calculate mitochondrial % to regress out with sctransform.
+mt.genes = c("ENSSSAG00000000007","ENSSSAG00000000011","ENSSSAG00000000017",
+             "ENSSSAG00000000020","ENSSSAG00000000022","ENSSSAG00000000023",
+             "ENSSSAG00000000024","ENSSSAG00000000026","ENSSSAG00000000028",
+             "ENSSSAG00000000029","ENSSSAG00000000033","ENSSSAG00000000034",
+             "ENSSSAG00000000036")
+
+#Remove mt.genes that are not present in the seurat A1 i.e. are expressed in too few cells so was filtered out in "CreateSeuratA1" function above
+mt.genes.present <- mt.genes[mt.genes %in% rownames(A1@assays$RNA@counts)]
+print(paste0(length(mt.genes.present),"/",length(mt.genes), " mito genes present in the count matrix"))
+
+#Ribosomal content
+rbgenes <- read.table(here::here("scripts","adriana_test","rbgenes_Ssalar.csv"),sep = ",", header = TRUE)
+ribo.genes <- rbgenes[,1]
+ribo.genes.present <- ribo.genes[ribo.genes %in% rownames(A1@assays$RNA@counts)]
+print(paste0(length(ribo.genes.present),"/",length(ribo.genes), " ribo genes present in the count matrix"))
+
+#Calculate % with Seurat function
+A1 <- PercentageFeatureSet(A1,features = mt.genes.present,col.name = "percent.mt")
+A1 <- PercentageFeatureSet(A1,features = ribo.genes.present,col.name = "percent.ribo")
+
+p1 <- VlnPlot(A1,features = c("percent.mt"),pt.size = 0) + geom_hline(yintercept = 10) + NoLegend()
+p2 <- VlnPlot(A1,features = c("percent.ribo"),pt.size = 0) + geom_hline(yintercept = 10) + NoLegend()
+p3 <- VlnPlot(A1,features = c("nFeature_RNA"),pt.size = 0,y.max = 20000) + geom_hline(yintercept = 200) + NoLegend()
+p4 <- VlnPlot(A1,features = c("nCount_RNA"),pt.size = 0,y.max = 30000) + geom_hline(yintercept = 300) + NoLegend()
+plot_grid(p1,p2,p3,p4,nrow = 2)
+
+#Possibly subset on mitochondrial proportion
+poor.quality.cells <- WhichCells(A1)[A1@meta.data$percent.mt > 10 | A1@meta.data$percent.ribo > 10 | A1@meta.data$nFeature_RNA < 150 | A1@meta.data$nCount_RNA < 150]
+print(length(poor.quality.cells))
+A1 <- subset(A1,cells = poor.quality.cells , invert = T)
+
+
+############ Normalisation and initial clustering ################
+
+#Normalise RNA data. SCTransform. PCA. UMAP.
+A1 <- NormalizeData(A1,assay = "RNA")
+A1 <- SCTransform(A1, vars.to.regress = c("percent.mt"), verbose = TRUE,method="glmGamPoi")
+A1 <- RunPCA(A1,verbose = FALSE)
+A1 <- RunUMAP(A1,seed.use = 488,dims = 1:30)
+
+# ################ Annotation ################ 
+markers.mps <- c("ENSSSAG00000002454","ENSSSAG00000065535","ENSSSAG00000076214",
+                 "ENSSSAG00000061479","ENSSSAG00000057796", "ENSSSAG00000084922", "ENSSSAG00000078459",
+                 "ENSSSAG00000001216", "ENSSSAG00000086256","ENSSSAG00000063553",
+                 "ENSSSAG00000094410", "ENSSSAG00000026315", "ENSSSAG00000062736","ENSSSAG00000086256","ENSSSAG00000061479","ENSSSAG00000009796");print(look.up.table$gene.name[match(markers.mps,look.up.table$ensembl.id)])
+
+markers.b <- c("ENSSSAG00000113980","ENSSSAG00000079780","ENSSSAG00000065613",
+               "ENSSSAG00000070298","ENSSSAG00000119971","ENSSSAG00000065541","ENSSSAG00000070298",
+               "ENSSSAG00000104911","ENSSSAG00000004970",
+               "ENSSSAG00000049747", "ENSSSAG00000075019", "ENSSSAG00000116510", "ENSSSAG00000004118", 
+               "ENSSSAG00000009589");print(look.up.table$gene.name[match(markers.b,look.up.table$ensembl.id)])
+
+markers.end <- c("ENSSSAG00000001494","ENSSSAG00000067902","ENSSSAG00000045007",
+                 "ENSSSAG00000088534","ENSSSAG00000040305","ENSSSAG00000083641","ENSSSAG00000046825",
+                 "ENSSSAG00000062927","ENSSSAG00000066215",
+                 "ENSSSAG00000073565", "ENSSSAG00000095197", "ENSSSAG00000074733", "ENSSSAG00000047898",
+                 "ENSSSAG00000071149", "ENSSSAG00000079118", "ENSSSAG00000118822", "ENSSSAG00000012320", "ENSSSAG00000008829",
+                 "ENSSSAG00000101595", "ENSSSAG00000120844", "ENSSSAG00000119915", "ENSSSAG00000073155");print(look.up.table$gene.name[match(markers.end,look.up.table$ensembl.id)])
+
+markers.gra <- c("ENSSSAG00000069874","ENSSSAG00000082290","ENSSSAG00000072134","ENSSSAG00000081699",
+                 "ENSSSAG00000070495","ENSSSAG00000071855","ENSSSAG00000055699", "ENSSSAG00000025124", "ENSSSAG00000095867",
+                 "ENSSSAG00000038140");print(look.up.table$gene.name[match(markers.gra,look.up.table$ensembl.id)])
+
+markers.hsc <- c("ENSSSAG00000065168", "ENSSSAG00000066926", "ENSSSAG00000059137", "ENSSSAG00000003744",
+                 "ENSSSAG00000100175", "ENSSSAG00000005642", "ENSSSAG00000031145");print(look.up.table$gene.name[match(markers.hsc,look.up.table$ensembl.id)])
+
+markers.int <- c("ENSSSAG00000009941","ENSSSAG00000111310","ENSSSAG00000103639","ENSSSAG00000070653",
+                 "ENSSSAG00000009209",
+                 "ENSSSAG00000109324","ENSSSAG00000106674","ENSSSAG00000075313","ENSSSAG00000004083","ENSSSAG00000068626","ENSSSAG00000074052","ENSSSAG00000036512",
+                 "ENSSSAG00000065510","ENSSSAG00000007492","ENSSSAG00000041623","ENSSSAG00000069380","ENSSSAG00000115399","ENSSSAG00000055312","ENSSSAG00000072340",
+                 "ENSSSAG00000041954","ENSSSAG00000053929","ENSSSAG00000086140","ENSSSAG00000121237","ENSSSAG00000043747",
+                 "ENSSSAG00000053824","ENSSSAG00000067287");print(look.up.table$gene.name[match(markers.int,look.up.table$ensembl.id)])
+
+markers.mes <- c("ENSSSAG00000069947","ENSSSAG00000108555",
+                 "ENSSSAG00000003409","ENSSSAG00000081483",
+                 "ENSSSAG00000005466","ENSSSAG00000046962","ENSSSAG00000067809","ENSSSAG00000059317","ENSSSAG00000040824","ENSSSAG00000101700","ENSSSAG00000010137",
+                 "ENSSSAG00000103244","ENSSSAG00000075851","ENSSSAG00000045616","ENSSSAG00000077859","ENSSSAG00000068865",
+                 "ENSSSAG00000046194","ENSSSAG00000030734");print(look.up.table$gene.name[match(markers.mes,look.up.table$ensembl.id)])
+
+markers.nk <- c("ENSSSAG00000002801","ENSSSAG00000045605","ENSSSAG00000094838",
+                "ENSSSAG00000079094","ENSSSAG00000117352","ENSSSAG00000009129","ENSSSAG00000043118",
+                "ENSSSAG00000006495","ENSSSAG00000096357",
+                "ENSSSAG00000107914", "ENSSSAG00000052644" ,"ENSSSAG00000074448", "ENSSSAG00000108168",
+                "ENSSSAG00000080648",  "ENSSSAG00000107923", "ENSSSAG00000078545", "ENSSSAG00000009327" );print(look.up.table$gene.name[match(markers.nk,look.up.table$ensembl.id)])
+
+markers.thr <- c("ENSSSAG00000006058","ENSSSAG00000006421","ENSSSAG00000044089","ENSSSAG00000008339",
+                 "ENSSSAG00000028016","ENSSSAG00000050579",
+                 "ENSSSAG00000075827", "ENSSSAG00000007509",
+                 "ENSSSAG00000046830","ENSSSAG00000045689","ENSSSAG00000043349","ENSSSAG00000086843","ENSSSAG00000002676",
+                 "ENSSSAG00000096562","ENSSSAG00000118808","ENSSSAG00000058403","ENSSSAG00000006344" ,
+                 "ENSSSAG00000063282","ENSSSAG00000074001","ENSSSAG00000092078");print(look.up.table$gene.name[match(markers.thr,look.up.table$ensembl.id)])
+
+markers.erythrocytes <- c("ENSSSAG00000068428","ENSSSAG00000047949","ENSSSAG00000099637","ENSSSAG00000064240",
+                          "ENSSSAG00000003968","ENSSSAG00000045065", "ENSSSAG00000065233", "ENSSSAG00000044737",
+                          "ENSSSAG00000064777","ENSSSAG00000001877","ENSSSAG00000087439",
+                          "ENSSSAG00000048536", "ENSSSAG00000053130", "ENSSSAG00000061234", "ENSSSAG00000078696", "ENSSSAG00000072430", "ENSSSAG00000103747",
+                          "ENSSSAG00000088798", "ENSSSAG00000095264");print(look.up.table$gene.name[match(markers.erythrocytes,look.up.table$ensembl.id)])
+
+markers.t <- c("ENSSSAG00000076824","ENSSSAG00000006857","ENSSSAG00000064204",
+               "ENSSSAG00000058389","ENSSSAG00000083857","ENSSSAG00000079285",
+               "ENSSSAG00000071984", "ENSSSAG00000081128", "ENSSSAG00000068132", "ENSSSAG00000047199", "ENSSSAG00000081821",
+               "ENSSSAG00000066533", "ENSSSAG00000072349", "ENSSSAG00000045088", "ENSSSAG00000077687", "ENSSSAG00000040361");print(look.up.table$gene.name[match(markers.t,look.up.table$ensembl.id)])
+
+markers.t.gd <- c("ENSSSAG00000058488","ENSSSAG00000087751",
+                  "ENSSSAG00000079702","ENSSSAG00000057029","ENSSSAG00000072601", "ENSSSAG00000059232", "ENSSSAG00000102087", "ENSSSAG00000065004", "ENSSSAG00000002046",
+                  "ENSSSAG00000086926","ENSSSAG00000116540", "ENSSSAG00000055826");print(look.up.table$gene.name[match(markers.t.gd,look.up.table$ensembl.id)])
+
+markers.ig <- c( "ENSSSAG00000048830", "ENSSSAG00000080049", "ENSSSAG00000116510", "ENSSSAG00000055328", "ENSSSAG00000009083", "ENSSSAG00000089454", "ENSSSAG00000108673",
+                 "ENSSSAG00000101162", "ENSSSAG00000002678", "ENSSSAG00000070948");print(look.up.table$gene.name[match(markers.ig,look.up.table$ensembl.id)])
+
+markers.b.immature <- c("ENSSSAG00000075916","ENSSSAG00000065644","ENSSSAG00000098654",
+                        "ENSSSAG00000042542","ENSSSAG00000075252",
+                        "ENSSSAG00000105878");print(look.up.table$gene.name[match(markers.b.immature,look.up.table$ensembl.id)])
+
+markers.stromal <- c("ENSSSAG00000065688","ENSSSAG00000111544","ENSSSAG00000075108","ENSSSAG00000118160","ENSSSAG00000121005","ENSSSAG00000086639",
+                     "ENSSSAG00000116689");print(look.up.table$gene.name[match(markers.stromal,look.up.table$ensembl.id)])
+
+cluster.markers <- list(
+  c("T_cells",markers.t),
+  c("gdT_cells",markers.t.gd),
+  c("Granulocytes",markers.gra),
+  c("NK",markers.nk),
+  c("MPs",markers.mps),
+  c("Endothelial",markers.end),
+  c("Erythrocytes",markers.erythrocytes),
+  c("Thrombocytes",markers.thr),
+  c("Plasma_cells",markers.ig),
+  c("HSC",markers.hsc),
+  c("Mesenchymal",markers.mes),
+  c("B_cells",markers.b),
+  c("Interrenal_cells", markers.int),
+  c("B_cells_immature",markers.b.immature),
+  c("Stromal",markers.stromal))
+
+#Store averages for each cell type in the meta data. Useful for plotting later when confirming doublets.
+for (entry in cluster.markers){
+  #Sometimes marker not in data e.g. if not of that cell type present at all. Deal with here.
+  present <- entry[-1] %in% rownames(A1@assays$SCT@data)
+  if (sum(!present) > 0){
+    print(paste0(entry[-1][!present], " not present in data (", entry[1],")"))
+  }
+  remaining.markers <- entry[-1][present]
+  A1@meta.data[entry[1]] = colMeans(A1@assays$SCT@data[remaining.markers,])
+}
+
+#Store names and lists of markers for use later
+cell.names <- c("B_cells","T_cells","gdT_cells","Granulocytes","NK","MPs","Endothelial","Erythrocytes",
+                "Thrombocytes","HSC","Plasma_cells", "Mesenchymal", "Interrenal_cells",
+                "B_cells_immature","Stromal")
+
+
+#Now annotate high resolution clustering using the automated clustering function
+A1 <- AnnotateClusters(object = A1,cluster.markers = cluster.markers,assay = "SCT",min.av.expr = 0.1,min.prop.markers = 0.4,resolution = 10,sds = 0.5,verbose = FALSE,dims = 30)
+
+#Plot average expression of markers
+levels(A1) <- sort(levels(A1))
+VlnPlot(A1,features = sort(cell.names), slot = "data",assay = "RNA",stack = TRUE, flip = TRUE,same.y.lims = TRUE) + NoLegend()
+
+#Look at markers - remove bad populations manually here
+markers.qc <- FindAllMarkers(A1, logfc.threshold = 0.5,only.pos = T,min.pct = 0.2,assay = "SCT",
+                             max.cells.per.ident = 250,verbose = T)
+markers.qc$gene.name <- look.up.table$gene.name[match(markers.qc$gene,look.up.table$ensembl.id)]
+markers.qc$product <- look.up.table$ncbi.product[match(markers.qc$gene,look.up.table$ensembl.id)]
+markers.qc$diff <- markers.qc$pct.1 - markers.qc$pct.2
+View(markers.qc)
+
+#testing markers expression for bad populations
+test <- subset(A1,idents = "gdT_cells/HSC")
+UMAPPlot(test)
+to.remove <-"Endothelial/Erythrocytes/Thrombocytes/HSC"
+#Check average values of cluster markers
+VlnPlot(test,features = markers.t.gd, slot = "data",assay = "RNA",stack = TRUE, flip = TRUE,same.y.lims = TRUE) + NoLegend()
+VlnPlot(test,features = markers.gra, slot = "data",assay = "RNA",stack = TRUE, flip = TRUE,same.y.lims = TRUE) + NoLegend()
+VlnPlot(test,features = markers.b, slot = "data",assay = "RNA",stack = TRUE, flip = TRUE,same.y.lims = TRUE) + NoLegend()
+
+#SAve original object
+A1.orig <- A1
+
+############## Doublet removal ################ 
+
+#Run cluster based doublet removal first to confirm potential doublet clusters from annotation step above
+tab <- findDoubletClusters(A1@assays$SCT@data, clusters = A1@active.ident,get.all.pairs = FALSE)
+View(as.data.frame(tab))
+
+#Choose populations to remove with very low unique de genes
+to.remove <- rownames(tab)[tab$num.de < 0.05 * tab$median.de]
+
+#Restrict to only potential doublet pops i.e. / in name based on "AnnotateClusters" function
+to.remove <- to.remove[grepl("/",to.remove)] #Only pops annotated as potentially doublets above have "/" in name
+to.remove <- to.remove[!grepl(c("HSC"),to.remove)] #Not pops potentially HSC - may be transitioning state
+print(to.remove)
+
+#Check average values of cluster markers
+VlnPlot(A1,features = cell.names, idents = to.remove, slot = "data",assay = "RNA",stack = TRUE, flip = TRUE,same.y.lims = TRUE) + NoLegend()
+to.remove <- to.remove[!grepl(c("Endothelial/Stromal"),to.remove)] #Keep
+to.remove <- to.remove[!grepl(c("Thrombocytes/HSC"),to.remove)]# Keep 
+
+#Remove confirmed doublet pops
+A1.pre.doublet.removal <- A1
+A1 <- subset(A1,idents = to.remove,invert = TRUE)
+
+#Identify other doublets now
+expected.doublets <- round(length(WhichCells(A1.orig))/1000 * 0.01 * length(WhichCells(A1.orig)))
+doublets.removed <- length(WhichCells(A1.pre.doublet.removal)) - length(WhichCells(A1))
+expected.doublet.rate <- max((expected.doublets-doublets.removed)/length(WhichCells(A1)),0)
+print(expected.doublet.rate)
+
+#Find doublets
+sce <- scDblFinder(A1@assays$SCT@data, clusters = TRUE,dbr = expected.doublet.rate)
+A1@meta.data$doublet.status <- sce$scDblFinder.class
+
+#Visualise doublets
+A1 <- SetIdent(A1,value = "doublet.status")
+UMAPPlot(A1,pt.size = 0.5)
+
+#Remove these doublet clusters
+A1 <- subset(A1,cells = WhichCells(A1,idents = "singlet"))
+#How many removed?
+print(paste0(length(WhichCells(A1.pre.doublet.removal)) - length(WhichCells(A1)), " doublets removed. (", 100 * (1 - length(WhichCells(A1))/length(WhichCells(A1.pre.doublet.removal))),"%)"))
+
+#Annotation was repeated every time we had to remove any cluster.
+
+saveRDS(A1,file = (here::here("output","initial_qc_obj","A1.RDS")))
