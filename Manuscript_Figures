@@ -1,0 +1,1664 @@
+library(Seurat)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(cowplot)
+library(harmony)
+library(ggpubr)
+library(tidyverse)
+library(scDblFinder)
+library(RColorBrewer)
+library(tidyr)
+library(gridExtra)
+library(data.table)
+library(here)
+library(readr)
+library(Matrix)
+library(readxl)
+library(ensembldb)
+library(org.Ssalar.eg.db)
+library(KEGGREST)
+library(clusterProfiler)
+library(dbplyr)
+library(AnnotationHub)
+library(DOSE)
+library(forcats)
+
+# Record start time-----
+start_time <- Sys.time()
+
+set.seed(123)
+#Load gene table and functions
+source(here::here("scripts","general","AnnotateCluster_2.R")) # AnnotateClusters()
+look.up.table <- read.csv(here::here("scripts", "general","s_salar_ensembl_106_gene_data_added_ISAV.csv"),header = T)
+look.up.table2 <- look.up.table[,c(1:4)]
+# integrate_fifthannot_noISAV <- readRDS(here::here("test_integration","results_JAN24","All_samples_Int",
+#                                        "ISAVEXCLUDED_May_2024_reanalysis","May26sun_integrate_fifthannot","ISAVEXCLUDED_MAYintegrate_fifthannot2.RDS"))
+integrate_fifthannot <- readRDS(here::here("test_integration","results_JAN24","All_samples_Int",
+                                           "ISAVEXCLUDED_May_2024_reanalysis",
+                                           "May26sun_integrate","ISAVEXCLUDED_MAYintegrate.RDS"))
+levels(integrate_fifthannot)
+
+current.cluster.ids <- c("B_cells", "Endo","Eryt","Granu","HSC","Inter","Mesen",
+                         "MPs","NK","T_cells","Thromb" ) 
+
+new.cluster.ids <- c("Bcells", "Endo","Eryt","Granu","HSC","Inter","Mesen",
+                     "MPs","NK-L","Tcells","Thromb" ) 
+
+integrate_fifthannot@active.ident <- plyr::mapvalues(x = integrate_fifthannot@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+
+#Specify colour scheme
+col.dataset = c("#f95b0b","#20709E","#831aeb") 
+col.dataset2 = c("#f2b494","#f95b0b","#20709E","#831aeb")
+col.dataset3 = c("#f9ab0b","#20909e")
+
+my_colors <- c("Bcells"='#AAAA00',"Endo" ='#d9596f',"Eryt"='#fdbcb4', "Granu"='#77AADD',
+               "HSC"='#b57edc', "Inter"= '#DDDDDD', "Mesen"= '#ffff62',
+               "MPs"='#619052', "NK-L"='#ff5f15', "Tcells"='#44BB99',"Thromb"='#99DDFF')
+
+#adding cluster column
+integrate_fifthannot$cluster <- integrate_fifthannot@active.ident
+
+#Figure 2A--------
+int_fig <- UMAPPlot(integrate_fifthannot, 
+                    pt.size=0.5,
+                    label = TRUE, 
+                    repel=T, 
+                    label.size = 8, cols=my_colors)& NoLegend()
+
+# Convert to ggplot object and modify axis text size
+int_fig <- int_fig + 
+  theme(
+    axis.text.x = element_text(size = 16),  # Increase x-axis numbers
+    axis.text.y = element_text(size = 16)   # Increase y-axis numbers
+  )
+
+int_fig
+
+# #Figure 2B-----------
+int<- as.data.frame(integrate_fifthannot@meta.data)
+counts_int <- group_by(int, group2, cluster) %>% dplyr::summarise(count = n())
+
+# Calculate percentages within each group22
+df <- within(counts_int, {
+  percent <- count/ave(count, group2, FUN=sum) * 100
+  percent <- round(percent)  # Round the percentages to integers
+})
+# Filter out rows where percent is zero
+df_filtered <- df[df$percent != 0, ]
+
+x <- df_filtered#[,c(1,2,4)] # sort by mpg
+# Your plot code with bars and facetting
+p <- x %>% 
+  na.omit() %>% 
+  ggplot(aes(x = percent, y = cluster, fill = cluster)) +  # Switched x and y back
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = my_colors) +  # Apply your custom colors
+  facet_grid(. ~ group2)&NoLegend()
+
+# Display the plot
+p <- p + 
+  geom_text(aes(label = paste0(round(percent), "%"), x = percent + 2), vjust = 0.5) +
+  theme_bw() & 
+  theme(
+    axis.text.y = element_text(size = 14),      # Increase size for y-axis labels
+    strip.text = element_text(size = 16, face = "bold")  # Increase size and add bold for facet titles
+  ) &NoLegend()
+# Display the plot
+print(p)
+
+
+#Fig2C---------
+DefaultAssay(integrate_fifthannot) <- "RNA"
+
+# Retrieve the raw counts data
+raw_counts <- GetAssayData(integrate_fifthannot, slot = "counts")
+
+# Define the list of valid viral genes, excluding seg7ORF1
+valid_viral_genes <- c("seg1", "seg2", "seg3", "seg4", "seg5", "seg6", "seg7ORF2", "seg8ORF2")
+
+# Check if these genes exist in the dataset
+valid_viral_genes <- valid_viral_genes[valid_viral_genes %in% rownames(raw_counts)]
+
+# Calculate total viral counts for each cell using the valid viral genes
+viral_counts <- colSums(raw_counts[valid_viral_genes, ])
+viral_countsDF <- as.data.frame(viral_counts)
+viral_countsDF$Cell_Nameraw <- rownames(viral_countsDF)
+# Calculate the total counts for each cell (normalized data)
+total_counts <- colSums(raw_counts)
+total_countsDF <- as.data.frame(total_counts)
+total_countsDF$Cell_Nameraw <- rownames(total_countsDF)
+
+# Calculate the viral load percentage for each cell
+viral_load_percentage <- (viral_counts / total_counts) * 100
+
+# Add the viral load percentage to the Seurat object metadata
+integrate_fifthannot <- AddMetaData(integrate_fifthannot, 
+                                    metadata = viral_load_percentage, 
+                                    col.name = "Viral_Load_Percentage")
+# Add raw viral counts to cell metadata
+integrate_fifthannot$Viral_Raw_Counts <- viral_counts
+
+# Step 1: Filter the Seurat object based on Viral_Load_Percentage
+filtered_object <- subset(integrate_fifthannot, subset = Viral_Load_Percentage >= 1)
+
+# Extract UMAP coordinates
+umap_data <- Embeddings(integrate_fifthannot, reduction = "umap")
+umap_df <- as.data.frame(umap_data)
+umap_df$Highlight <- ifelse(integrate_fifthannot$Viral_Load_Percentage >= 1, "High", "Low")
+
+
+umap_df$Cluster <- integrate_fifthannot$cluster
+
+# Create the Highlight Plot
+highlight_plot <- ggplot(umap_df, aes(x = UMAP_1, y = UMAP_2, color = Highlight)) +
+  geom_point(size = 1, alpha = 0.7) +
+  scale_color_manual(values = c("High" = "blue", "Low" = "gray")) +
+  theme_void() +
+  theme(legend.position = "none")
+
+# Display the Highlight Plot
+print(highlight_plot)
+
+##onlyallsegmentsFEATUREPLOT-----------
+
+# Define the ISAV segments
+isav_segments <- c("seg1", "seg2", "seg3", "seg4", "seg5", "seg6", "seg7ORF2", "seg8ORF2")
+
+# Check if all ISAV segments are present in the dataset
+isav_segments_present <- isav_segments[isav_segments %in% rownames(filtered_object@assays$RNA@counts)]
+
+# Find cells expressing all ISAV segments
+expressing_all_segments <- colSums(filtered_object@assays$RNA@counts[isav_segments_present, ] > 0) == length(isav_segments_present)
+
+# Name the logical vector with cell names
+names(expressing_all_segments) <- colnames(filtered_object)
+
+# Add the logical vector as metadata to the Seurat object
+filtered_object <- AddMetaData(object = filtered_object, 
+                               metadata = expressing_all_segments, 
+                               col.name = "all_segments")
+
+# Filter for cells expressing all segments and group by 'group2' (v12 and v16)
+num_cells_expressing_all_by_group <- filtered_object@meta.data %>%
+  filter(all_segments == TRUE) %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(num_cells = n())
+
+# Print the result
+print(num_cells_expressing_all_by_group)
+
+# Step 2: Add a layer to highlight cells where all_segments is TRUE
+# Extract UMAP coordinates and metadata
+umap_data <- Embeddings(filtered_object, reduction = "umap")
+umap_df <- as.data.frame(umap_data)
+umap_df$all_segments <- filtered_object$all_segments
+
+# Create a separate data frame for highlighting
+highlight_df <- umap_df[umap_df$all_segments == TRUE, ]
+
+# Overlay the highlighting on the FeaturePlot
+highlight_plot2 <- highlight_plot + 
+  geom_point(data = highlight_df, aes(x = UMAP_1, y = UMAP_2), color = "red", size = 1, alpha = 0.5) 
+# Display the plot
+print(highlight_plot2)
+
+#Fig2D---------
+# Subsetting the Seurat object to include only 'v12' and 'v16' samples
+# ALL_virus <- subset(integrate_fifthannot, subset = group2 %in% c("v12", "v16"))
+# # Step 1: Filter the Seurat object based on Viral_Load_Percentage
+# filtered_object <- subset(ALL_virus, subset = Viral_Load_Percentage >= 1)
+
+# Convert the metadata to a data frame if it's not already
+meta_data <- integrate_fifthannot@meta.data
+
+# Filter cells with Viral_Raw_Counts greater than 0
+filtered_cells <- meta_data %>%
+  filter(Viral_Raw_Counts > 0)
+
+# Count the number of cells in each cluster
+cell_counts_per_cluster <- dplyr::summarize(
+  dplyr::group_by(filtered_cells, cluster),
+  count = dplyr::n(),
+  .groups = 'drop'
+)
+# Print the result
+print(cell_counts_per_cluster)
+
+###########-----
+# Filter cells with Viral_Load_Percentage greater than 1
+filtered_cells <- meta_data %>%
+  filter(Viral_Load_Percentage > 1)
+
+# Count the number of cells in each cluster----
+cell_counts_per_cluster <- filtered_cells %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(count = dplyr::n(), .groups = 'drop')
+
+
+# Print the result
+print(cell_counts_per_cluster)
+
+#####Total number 
+# Count the number of cells in each cluster
+cell_counts_per_cluster <- meta_data %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(count =  dplyr::n(), .groups = 'drop')
+
+# Print the result
+print(cell_counts_per_cluster)
+
+# Count the total number of cells and the number of infected cells by cluster and group2--------
+cell_counts <- meta_data %>%
+  dplyr::group_by(cluster, group2) %>%
+  dplyr::summarize(
+    total_cells = dplyr::n(),
+    infected_cells = sum(Viral_Load_Percentage > 1),
+    .groups = 'drop'
+  )
+
+# Calculate the percentage of infected cells in each cluster and group2
+cell_counts <- cell_counts %>%
+  mutate(
+    percentage_infected = (infected_cells / total_cells) * 100
+  )
+# Count the total number of cells by group2 for population percentage calculation
+total_cells_by_group <- meta_data %>%
+  dplyr::group_by(group2) %>%
+  dplyr::summarize(
+    total_cells_group = n(),
+    .groups = 'drop'
+  )
+# Calculate the percentage of each cluster within each group2
+population_percentages <- cell_counts %>%
+  left_join(total_cells_by_group, by = "group2") %>%
+  mutate(
+    percentage_population = (total_cells / total_cells_group) * 100
+  )
+
+# Print the result
+print(population_percentages)
+# Filter data for each category
+# Data Preparation for day 12 and day 16
+data_day12 <- population_percentages %>% filter(grepl("12", group2))
+data_day16 <- population_percentages %>% filter(grepl("16", group2))
+
+# Function to create a grouped bar plot without borders
+create_grouped_bar_plot_no_borders <- function(data, day_label) {
+  ggplot(data, aes(x = cluster)) +
+    geom_bar(aes(y = total_cells, fill = "Total Cells"), 
+             stat = "identity", position = "dodge", width = 0.7, color = NA) +  # No border
+    geom_bar(aes(y = infected_cells, fill = "Infected Cells"), 
+             stat = "identity", position = "dodge", width = 0.7, alpha = 0.6, color = NA) +  # No border
+    geom_text(aes(y = total_cells + 50, 
+                  label = ifelse(percentage_infected > 0.9, paste0(round(percentage_infected), "%"), "")),
+              color = "black", size = 5, position = position_dodge(width = 1)) +
+    scale_fill_manual(values = c("Total Cells" = "lightgray", "Infected Cells" = "red")) +
+    labs(
+      title = paste("Day", day_label, sep =""),
+      x = "Cluster",
+      y = "Number of Cells",
+      fill = "Cell Type"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 90, hjust = 1),
+          panel.grid = element_blank(),  # Remove grid lines
+          axis.line = element_line(color = "black")  # Add x and y axis lines
+    )+
+    scale_y_continuous(expand = expansion(mult = c(0, 0.05)))  # Reduce space at the bottom
+}
+
+# Create plots for day 12 and day 16
+plot_day12 <- create_grouped_bar_plot_no_borders(data_day12, "16")+ 
+  theme(
+    axis.text.x = element_text(size = 16),  # Increase x-axis numbers
+    axis.text.y = element_text(size = 16)   # Increase y-axis numbers
+  )
+
+plot_day16 <- create_grouped_bar_plot_no_borders(data_day16, "16")+ 
+  theme(
+    axis.text.x = element_text(size = 16),  # Increase x-axis numbers
+    axis.text.y = element_text(size = 16)   # Increase y-axis numbers
+  )
+
+# Display the plots side by side
+grid.arrange(plot_day12, plot_day16, ncol = 2)
+# Combine the two plots into one
+combined_plot <- grid.arrange(plot_day12, plot_day16, ncol = 2)
+
+#Fig 3A--------
+# Filter out DEGs with fold change between -1 and 1
+pseudoDEGs <- read.csv(here::here("test_integration","results_JAN24",
+                                  "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis",
+                                  "Pseudobulk",
+                                  "ISAVEXCLUDED_MAYintegrate_pseudoDEGs.csv"))
+# Remove the extra column if it's just an index
+pseudoDEGs <- pseudoDEGs %>% select(-X)
+
+# Rename the Cell_Type values
+pseudoDEGs <- pseudoDEGs %>%
+  mutate(Cell_Type = recode(Cell_Type,
+                            "bcell" = "Bcells",
+                            "NK" = "NK-L",
+                            "rbc" = "Eryt",
+                            "tcell" = "Tcells"))  # Add any other renames as needed
+
+# Filter data for Condition 12
+df_condition_12 <- pseudoDEGs %>%
+  filter(Condition == "12") %>%
+  group_by(Cell_Type, DEG_Type) %>%
+  dplyr::summarise(Count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = DEG_Type, values_from = Count, values_fill = list(Count = 0)) %>%
+  dplyr::rename(Down = Downregulated, Up = Upregulated) %>%
+  mutate(Down = -Down)  # Convert downregulated counts to negative for bidirectional chart
+
+# Prepare data for plotting
+plot_data <- df_condition_12 %>%
+  pivot_longer(cols = c(Down, Up), names_to = "DEG_Type", values_to = "Count") %>%
+  mutate(DEG_Type = factor(DEG_Type, levels = c("Down", "Up")),
+         Cell_Type = factor(Cell_Type, levels = unique(df_condition_12$Cell_Type)))
+
+# Arrange alphabetically
+# Manually set the factor levels in alphabetical order
+plot_data$Cell_Type <- factor(plot_data$Cell_Type, 
+                              levels = sort(c("Bcells", "Eryt", "Endo", "Granu", 
+                                              "HSC", "Inter", "Mesen", "MPs", 
+                                              "NK-L", "Tcells", "Thromb")))
+
+
+# Create the bidirectional bar chart
+D12 <- ggplot(plot_data, aes(x = Cell_Type, y = Count, fill = DEG_Type)) +
+  geom_bar(stat = "identity", position = "identity") +
+  geom_text(aes(label = abs(Count), y = ifelse(DEG_Type == "Up", Count + 30, Count - 30)), 
+            color = "black", size = 4) +
+  coord_flip() +
+  labs(x = "Cell Type", y = "Count",) +
+  scale_fill_manual(values = c("Up" = "blue", "Down" = "red")) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),       # Remove x-axis title
+    axis.text.x = element_blank(),        # Remove x-axis text
+    axis.ticks.x = element_blank(),       # Remove x-axis ticks
+    axis.text.y = element_text(size = 16) # Adjust y-axis text size if needed
+  )
+# D12
+# ggsave(file = (here::here("test_integration","results_JAN24",
+#                           "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis",
+#                           "Manus","Figures","Fig4","Fig4A_1.svg")),plot = D12,
+#        width = 12,height = 10,units = "in")
+
+# Filter data for Condition 16--------------
+df_condition_16 <- pseudoDEGs %>%
+  filter(Condition == "16") %>%
+  group_by(Cell_Type, DEG_Type) %>%
+  dplyr::summarise(Count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = DEG_Type, values_from = Count, values_fill = list(Count = 0)) %>%
+  dplyr::rename(Down = Downregulated, Up = Upregulated) %>%
+  mutate(Down = -Down)  # Convert downregulated counts to negative for bidirectional chart
+
+
+# Prepare data for plotting
+plot_data2 <- df_condition_16 %>%
+  pivot_longer(cols = c(Down, Up), names_to = "DEG_Type", values_to = "Count") %>%
+  mutate(DEG_Type = factor(DEG_Type, levels = c("Down", "Up")),
+         Cell_Type = factor(Cell_Type, levels = unique(df_condition_12$Cell_Type)))
+
+# Manually set the factor levels in alphabetical order
+plot_data2$Cell_Type <- factor(plot_data2$Cell_Type, 
+                               levels = sort(c("Bcells", "Eryt", "Endo", "Granu", 
+                                               "HSC", "Inter", "Mesen", "MPs", 
+                                               "NK-L", "Tcells", "Thromb")))
+
+
+# Create the bidirectional bar chart
+D16 <- ggplot(plot_data2, aes(x = Cell_Type, y = Count, fill = DEG_Type)) +
+  geom_bar(stat = "identity", position = "identity") +
+  geom_text(aes(label = abs(Count), y = ifelse(DEG_Type == "Up", Count + 30, Count - 30)), 
+            color = "black", size = 4) +
+  coord_flip() +
+  labs(x = "Cell Type", y = "Count") +
+  scale_fill_manual(values = c("Up" = "blue", "Down" = "red")) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),       # Remove x-axis title
+    axis.text.x = element_blank(),        # Remove x-axis text
+    axis.ticks.x = element_blank(),       # Remove x-axis ticks
+    axis.text.y = element_text(size = 16) # Adjust y-axis text size if needed
+  )
+D16
+
+# Display the plots side by side
+together <- grid.arrange(D12, D16, ncol = 2)
+
+#fig3B-------
+###PolyIC--------
+polyIC <- read.table(here::here("test_integration","results_JAN24","All_samples_Int","All_TableS2.csv"),sep = ",", header = TRUE)
+polyIC2 <- polyIC[,1]
+polyIC.present <- polyIC2[polyIC2 %in% rownames(integrate_fifthannot@assays$RNA@counts)]
+print(paste0(length(polyIC.present),"/",length(polyIC2), " poly genes present in the count matrix"))
+
+# Filter for polyIC genes and upregulated DEGs
+
+genesfromClark <- left_join(polyIC, look.up.table2,by=c("Gene_ID" ="ensembl.id"))
+
+genesfromClark <- left_join(polyIC, pseudoDEGs,by=c("Gene_ID" ="ensembl"))
+genesfromClark <- genesfromClark[complete.cases(genesfromClark$log2FoldChange),]
+
+#Bidirectionalgraphs------
+# Filter data for Condition 12
+clark_12 <- genesfromClark %>%
+  filter(Condition == "12") %>%
+  group_by(Cell_Type, DEG_Type) %>%
+  dplyr::summarise(Count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = DEG_Type, values_from = Count, values_fill = list(Count = 0)) %>%
+  dplyr::rename(Down = Downregulated, Up = Upregulated) %>%
+  mutate(Down = -Down)  # Convert downregulated counts to negative for bidirectional chart
+
+# Prepare data for plotting
+plot_data <- clark_12 %>%
+  pivot_longer(cols = c(Down, Up), names_to = "DEG_Type", values_to = "Count") %>%
+  mutate(DEG_Type = factor(DEG_Type, levels = c("Down", "Up")),
+         Cell_Type = factor(Cell_Type, levels = unique(df_condition_12$Cell_Type)))
+
+# Arrange alphabetically
+# Manually set the factor levels in alphabetical order
+plot_data$Cell_Type <- factor(plot_data$Cell_Type, 
+                              levels = sort(c("Bcells", "Eryt", "Endo", "Granu", 
+                                              "HSC", "Inter", "Mesen", "MPs", 
+                                              "NK-L", "Tcells", "Thromb")))
+
+# Create the bidirectional bar chart
+D12 <- ggplot(plot_data, aes(x = Cell_Type, y = Count, fill = DEG_Type)) +
+  geom_bar(stat = "identity", position = "identity") +
+  geom_text(aes(label = abs(Count), y = ifelse(DEG_Type == "Up", Count + 30, Count - 30)), 
+            color = "black", size = 5) +
+  coord_flip() +
+  labs(x = "Cell Type", y = "Count",) +
+  scale_fill_manual(values = c("Up" = "blue", "Down" = "red")) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),       # Remove x-axis title
+    axis.text.x = element_blank(),        # Remove x-axis text
+    axis.ticks.x = element_blank(),       # Remove x-axis ticks
+    axis.text.y = element_text(size = 16) # Adjust y-axis text size if needed
+  )
+D12
+
+# Filter data for Condition 16
+clark_16 <- genesfromClark %>%
+  filter(Condition == "16") %>%
+  group_by(Cell_Type, DEG_Type) %>%
+  dplyr::summarise(Count = n(), .groups = 'drop') %>%
+  pivot_wider(names_from = DEG_Type, values_from = Count, values_fill = list(Count = 0)) %>%
+  dplyr::rename(Down = Downregulated, Up = Upregulated) %>%
+  mutate(Down = -Down)  # Convert downregulated counts to negative for bidirectional chart
+
+# Prepare data for plotting
+plot_data <- clark_16 %>%
+  pivot_longer(cols = c(Down, Up), names_to = "DEG_Type", values_to = "Count") %>%
+  mutate(DEG_Type = factor(DEG_Type, levels = c("Down", "Up")),
+         Cell_Type = factor(Cell_Type, levels = unique(df_condition_12$Cell_Type)))
+
+# Arrange alphabetically
+# Manually set the factor levels in alphabetical order
+plot_data$Cell_Type <- factor(plot_data$Cell_Type, 
+                              levels = sort(c("Bcells", "Eryt", "Endo", "Granu", 
+                                              "HSC", "Inter", "Mesen", "MPs", 
+                                              "NK-L", "Tcells", "Thromb")))
+
+
+# Create the bidirectional bar chart
+D16 <- ggplot(plot_data, aes(x = Cell_Type, y = Count, fill = DEG_Type)) +
+  geom_bar(stat = "identity", position = "identity") +
+  geom_text(aes(label = abs(Count), y = ifelse(DEG_Type == "Up", Count + 30, Count - 30)), 
+            color = "black", size = 5) +
+  coord_flip() +
+  labs(x = "Cell Type", y = "Count",) +
+  scale_fill_manual(values = c("Up" = "blue", "Down" = "red")) +
+  theme_minimal() +
+  theme(
+    axis.title.x = element_blank(),       # Remove x-axis title
+    axis.text.x = element_blank(),        # Remove x-axis text
+    axis.ticks.x = element_blank(),       # Remove x-axis ticks
+    axis.text.y = element_text(size = 16) # Adjust y-axis text size if needed
+  )
+D16
+
+togetherPoly <- grid.arrange(D12, D16, ncol = 2)
+
+#Fig3_GO ANALYSIS ENDO--------
+look.up.table2 <- look.up.table[,c(1,2,3,6)]
+
+#This file is from biomart
+mart_export <- read.delim(here::here("test_integration","results_JAN24","All_samples_Int","mart_export.txt"))
+mart_export <- mart_export[mart_export$GO.term.accession != "",]
+
+#this file is from making the salmon OrgDB from Diego (Make_OrgDB.Rmd)
+goterms_ssalar <- read.csv(here::here("test_integration","results_JAN24",
+                                      "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis",
+                                      "goterms_ssalar.csv"))
+goterms_ssalar <- goterms_ssalar[,c(1:3)]
+
+#Endo all - Here use the file result of pseudobulk analysis of endothelial cells
+ENDOpseudoDEG <- read_csv("test_integration/results_JAN24/All_samples_Int/ISAVEXCLUDED_May_2024_reanalysis/Pseudobulk/ISAVEXCLUDED_MAYENDOpseudoDEGs.csv")
+
+ENDOpseudoDEG <- ENDOpseudoDEG[,c(2,3,7,11,12)]
+
+ENDOpseudoDEG <- ENDOpseudoDEG %>%
+  group_by(ensembl, cluster) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+pseudo_clean_entrez <- left_join(ENDOpseudoDEG, goterms_ssalar, by =c("ensembl"="GID"))
+
+# Remove duplicate genes within the same cluster and GO term
+pseudo_clean_entrez_unique <- pseudo_clean_entrez %>%
+  group_by(ensembl, cluster, GO) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+
+#It seems we get more terms with biomart. So I will use this
+Goterms <- left_join(ENDOpseudoDEG, mart_export, by=c("ensembl" = "Gene.stable.ID"))
+Goterms <- Goterms[,c(1:5,9,10)]
+Goterms <- Goterms[complete.cases(Goterms$`GO.term.accession`),]
+Goterms_unique <- Goterms %>%
+  group_by(ensembl, cluster, GO.term.accession) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+
+Endo <- readRDS(here::here("test_integration","results_JAN24",
+                           "All_samples_Int",
+                           "ISAVEXCLUDED_May_2024_reanalysis",
+                           "May26sun_EndoSUBres01",
+                           "ISAVEXCLUDED_MAYres01_ENDOsub.RDS"))
+
+#Adding log average expression on the markers sheet
+int.avg <- AverageExpression(object = Endo, assays = 'RNA',slot = "data", return.seurat = T)
+int.avg <- as.data.frame(int.avg@assays[["RNA"]]@data)
+int.avg <- round(int.avg, digits = 3)
+int.avg <- rownames_to_column(int.avg, var = "ensembl")
+ans = int.avg[rowSums(int.avg[,c(2:4)])>0,]
+
+#Kegg analysis
+mart_exportentrezID <- read_csv("test_integration/results_JAN24/All_samples_Int/mart_exportentrezID.txt")
+colnames(mart_exportentrezID)[7] <- "entrezid"
+colnames(mart_exportentrezID)[1] <- "ensembl"
+ans <- left_join(ans,mart_exportentrezID)
+ans <- ans[!duplicated(ans[c(1)]),]
+
+# #Define species to be analyzed
+OrgDb <- org.Ssalar.eg.db
+
+#All expressed genes
+universe_all<-ans[,c(1)]
+colnames(look.up.table)[1] <- "ensembl"
+# names_all<-na.omit(as.character(universe_all$ensembl))
+names_all<-universe_all
+#Significant genes
+
+library(tidyr)
+library(dplyr)
+
+results1<- Goterms_unique
+results1 <- results1[,c(1,3,5,6)]
+
+results1_long <- results1
+results1_long <- results1_long[complete.cases(results1_long),]
+
+#Make a list of DEGs
+geneList <- as.vector(results1_long$log2FoldChange)
+names(geneList) <- as.character(results1_long$ensembl)
+gene <- na.omit(as.character(results1$ensembl))
+geneList=sort(unlist(geneList), decreasing = TRUE)
+
+# GO over-representation test (Biological Process, Molecular Function and Cellular Component )
+#Make a data frame with names (Gene ID) and FC(log2foldChange)
+mydf <- results1_long
+mydf <- mydf[abs(mydf$log2FoldChange) > 1,]
+mydf$othergroup <- "Upregulated"
+mydf$othergroup[mydf$log2FoldChange < -1] <- "Downregulated"
+mydf[,1] <- sapply(mydf[,1], as.character)
+mydf <- mydf[complete.cases(mydf$ensembl),]
+
+#Clustercompare BP ontology
+formula_ENDO_ss <- compareCluster(ensembl~cluster, data=mydf, fun="enrichGO",
+                                  OrgDb=OrgDb, ont= "ALL", keyType='GID',
+                                  universe= names_all, pAdjustMethod = "BH",
+                                  pvalueCutoff = 0.05)
+head(as.data.frame(formula_ENDO_ss))
+formula_ENDO_df<- as.data.frame(formula_ENDO_ss)
+
+#simplified
+MF2 <- clusterProfiler::simplify(formula_ENDO_ss, cutoff=0.8, by="p.adjust",measure= "Wang",select_fun=min)
+MF2<- as.data.frame(MF2)
+# Filter for BP and MF terms only
+MF2 <- MF2 %>%
+  filter(ONTOLOGY %in% c("BP", "MF"))
+
+ego2 <- mutate(MF2, FoldEnrichment = parse_ratio(GeneRatio)/ parse_ratio(BgRatio))
+ego2<- as.data.frame(ego2)
+ego2 <- subset(ego2,ego2$Count>4)
+ego2<- ego2[order(ego2$Count, decreasing = TRUE),]
+
+# Creating the new 'Day' column based on the 'Cluster' column
+ego2 <- ego2 %>%
+  mutate(Day = if_else(grepl("12", Cluster), 12, 
+                       if_else(grepl("16", Cluster), 16, NA_integer_)))
+
+allgp1 <- ggplot(ego2, showCategory = 10,
+                 aes(FoldEnrichment, fct_reorder(Description, FoldEnrichment))) +
+  geom_segment(aes(xend = 0, yend = Description)) +
+  geom_point(aes(color = p.adjust, size = Count)) +
+  scale_color_gradientn(colours = c("#f7ca64", "#46bac2", "#7e62a3"),
+                        trans = "log10",
+                        guide = guide_colorbar(reverse = TRUE, order = 1)) +
+  scale_size_continuous(range = c(2, 10)) +
+  theme_dose(12) +
+  xlab("Fold Enrichment") +
+  facet_grid(ONTOLOGY ~ Cluster, scales = "free", space = "free_y") +
+  theme(
+    axis.text.y = element_text(size = 10, margin = margin(t = 0, b = 0)),
+    panel.spacing.y = unit(0.05, "lines"),
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16)   # Facet strip text
+  )
+allgp1
+
+library("AnnotationDbi")
+library(Seurat)
+#Adding log average expression on the markers sheet
+ans = int.avg[rowSums(int.avg[,c(2:4)])>0,]
+colnames(ans)[1] <- "ensembl"
+#Kegg analysis
+mart_exportentrezID <- read_csv("test_integration/results_JAN24/All_samples_Int/mart_exportentrezID.txt")
+colnames(mart_exportentrezID)[7] <- "ncbi.id"
+colnames(mart_exportentrezID)[1] <- "ensembl"
+test <- look.up.table[complete.cases(look.up.table$ncbi.id),]
+test2 <- mart_exportentrezID[complete.cases(mart_exportentrezID$ncbi.id),]
+test2 <- test2[!duplicated(test2[c(1)]),]
+
+ans <- left_join(ans,test2)
+keggmydf <- ans[,c(1,10)]
+gotermENTREZ<- right_join(ans,pseudo_clean_entrez_unique)
+gotermENTREZ <- gotermENTREZ %>%
+  group_by(ensembl, cluster) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+
+
+results1<- gotermENTREZ
+results1 <- results1[,c(13,15:18)]
+
+results1_long <- results1
+results1_long <- results1_long[complete.cases(results1_long$ncbi.id),]
+
+#Make a list of DEGs
+geneList <- as.vector(results1_long$log2FoldChange)
+names(geneList) <- as.character(results1_long$ncbi.id)
+gene <- na.omit(as.character(results1$ncbi.id))
+geneList=sort(unlist(geneList), decreasing = TRUE)
+
+# GO over-representation test (Biological Process, Molecular Function and Cellular Component )
+#Make a data frame with names (Gene ID) and FC(log2foldChange)
+mydf <- results1_long
+mydf <- mydf[abs(mydf$log2FoldChange) > 1,]
+mydf$othergroup <- "Upregulated"
+mydf$othergroup[mydf$log2FoldChange < -1] <- "Downregulated"
+mydf[,1] <- sapply(mydf[,1], as.character)
+mydf <- mydf[complete.cases(mydf$ncbi.id),]
+
+formula_KEGG_ssendo <- compareCluster(ncbi.id~cluster, data=mydf, fun="enrichKEGG",
+                                      organism = "sasa", pAdjustMethod = "BH",
+                                      pvalueCutoff = 0.05)
+
+KEGG_ssdf  <- as.data.frame(formula_KEGG_ssendo)
+KEGG_ssdf <- subset(KEGG_ssdf, KEGG_ssdf$Count > 4)
+KEGG_ssdf<- KEGG_ssdf[order(KEGG_ssdf$Count, decreasing = TRUE),]
+
+library(ggplot2)
+library(ggpubr) # For theme_pubr()
+
+library(DOSE)# Remove " - Salmo salar (Atlantic salmon)" from the Description column
+
+ego3 <- mutate(KEGG_ssdf, FoldEnrichment = parse_ratio(GeneRatio)/ parse_ratio(BgRatio))
+ego3<- as.data.frame(ego3)
+ego3 <- subset(ego3,ego3$Count>4)
+ego3<- ego3[order(ego3$Count, decreasing = TRUE),]
+ego3$Description <- gsub("- Salmo salar \\(Atlantic salmon\\)", " ", ego3$Description)
+# Creating the new 'Day' column based on the 'Cluster' column
+ego3 <- ego3 %>%
+  mutate(Day = if_else(grepl("12", Cluster), 12, 
+                       if_else(grepl("16", Cluster), 16, NA_integer_)))
+
+allgp2 <-ggplot(ego3, showCategory = 10,
+                aes(FoldEnrichment, fct_reorder(Description, FoldEnrichment))) +
+  geom_segment(aes(xend=0, yend = Description)) +
+  geom_point(aes(color=p.adjust, size = Count)) +
+  scale_color_gradientn(colours=c("#f7ca64", "#46bac2", "#7e62a3"),
+                        trans = "log10",
+                        guide=guide_colorbar(reverse=TRUE, order=1)) +
+  scale_size_continuous(range=c(2, 10)) +
+  theme_dose(12) +
+  xlab("Fold Enrichment")+
+  theme(
+    axis.text.y = element_text(size = 10, margin = margin(t = 0, b = 0)),
+    panel.spacing.y = unit(0.05, "lines"),
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16)   # Facet strip text
+  )
+allgp2 <- allgp2 + facet_grid(~ Cluster, scales = "free") 
+allgp2
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+#Known Markers All
+Pop_markers <- c("ENSSSAG00000113980","ENSSSAG00000079780","ENSSSAG00000065541","ENSSSAG00000116510", #bcells
+                 "ENSSSAG00000040305","ENSSSAG00000083641","ENSSSAG00000046825","ENSSSAG00000062927", #endo
+                 "ENSSSAG00000045065", "ENSSSAG00000044737","ENSSSAG00000046758", "ENSSSAG00000078696",#erythrocytes
+                 "ENSSSAG00000069874","ENSSSAG00000041566","ENSSSAG00000070495","ENSSSAG00000048994",#granulocytes
+                 "ENSSSAG00000065168", "ENSSSAG00000066926", "ENSSSAG00000100175","ENSSSAG00000003744",#hematopoietic
+                 "ENSSSAG00000009941","ENSSSAG00000103639","ENSSSAG00000106674","ENSSSAG00000036512",#interrenal
+                 "ENSSSAG00000069947","ENSSSAG00000067809","ENSSSAG00000040824","ENSSSAG00000030734",#mesenchymal
+                 "ENSSSAG00000002454","ENSSSAG00000065535","ENSSSAG00000076214","ENSSSAG00000043967", #mononuclear phagocytes
+                 "ENSSSAG00000002801","ENSSSAG00000064246","ENSSSAG00000079094","ENSSSAG00000117352",#NK cells
+                 "ENSSSAG00000076824","ENSSSAG00000006857","ENSSSAG00000083857","ENSSSAG00000098580",#Tcells
+                 "ENSSSAG00000006421","ENSSSAG00000044089","ENSSSAG00000028016","ENSSSAG00000050579"#,#Thrombocytes
+                 #"seg1","seg2","seg3","seg4","seg5","seg6","seg7ORF2","seg8ORF2"#Virus
+);print(look.up.table$gene.name[match(Pop_markers,look.up.table$ensembl.id)])
+
+
+v1 <- VlnPlot(integrate_fifthannot,features = Pop_markers,slot = "data",assay = "RNA",
+              stack = TRUE, flip = F,same.y.lims = T, cols=my_colors,split.by = "cluster",)
+names <- look.up.table$gene.name[match(Pop_markers,look.up.table$ensembl.id)]
+v1$data$feature <- mapvalues(v1$data$feature, from = Pop_markers, to = names)
+
+v1 <- v1 +
+  NoLegend()
+
+# Display the modified plot
+print(v1)
+# ggsave(file = (here::here("test_integration","results_JAN24","All_samples_Int",
+#                           "ISAVEXCLUDED_May_2024_reanalysis",
+#                           "Manus","Figures","Fig2","Fig2C.svg"))
+#        ,plot = v1,
+#        width = 20,height = 15,units = "in")
+
+#fig3-----------
+#Fig3A1
+
+
+#Fig3C--------
+
+
+
+
+#Fig4A--------
+DefaultAssay(Endo) <- "RNA"
+# Replace this with your actual mapping if it's different
+new_ident_mapping <- c("0" = "E1", "1" = "E2", "2" = "E3", "3" = "E4", "4" = "E5", "5" = "E6")
+Endo@meta.data$cluster <- new_ident_mapping[as.character(Endo@meta.data$cluster)]
+# Define your color palette---------
+colors <- c("E1" = "#ff7f0e",
+            "E2" = "#1f77b4",
+            "E3" = "#2ca02c",
+            "E4" = "#9467bd",
+            "E5" = "#d62728",
+            "E6" = "#e377c2")
+#Fig6a
+#UMAP
+Endo_HK_fig <- UMAPPlot(Endo, 
+                        pt.size=1.5,
+                        label = TRUE, 
+                        repel=T, 
+                        label.size = 5, cols= colors,
+                        split.by="group2", ncol=2) & NoLegend()
+
+Endo_HK_fig
+
+
+#Fig4 B------
+# Extract metadata from Seurat object
+metadata <- Endo@meta.data
+
+metadata_percent <- metadata %>%
+  # Count occurrences of each combination of group2 and cluster
+  add_count(group2, cluster) %>%
+  # Calculate the total number of cells for each group2
+  add_count(group2, name = "total_cells") %>%
+  # Now calculate the percentage for each group2-cluster combination
+  mutate(percentage = n / total_cells * 100) %>%
+  # Remove duplicate columns
+  select(group2, cluster, count = n, percentage) %>%
+  distinct() %>%
+  ungroup()
+
+# Plot the data with borders and custom y-axis breaks
+p <- ggplot(metadata_percent, aes(x = group2, y = percentage, fill = cluster)) +  # Use 'percentage' column
+  geom_bar(stat = "identity", position = "stack", color = "black") +  # Add black borders
+  scale_fill_manual(values = colors) +  # Apply custom colors
+  scale_y_continuous(breaks = seq(0, 100, by = 10)) +  # Set y-axis breaks
+  labs(x = "Group", y = "Percentage of Cells (%)", fill = "Cluster") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+p
+
+#Fig4C-----------
+Endo$cluster <- Endo@active.ident
+# Create a dataframe with counts per cluster-condition pair
+cell_counts <- Endo@meta.data %>%
+  dplyr::group_by(cluster, group) %>%
+  dplyr::summarize(n_cells = n()) %>%
+  dplyr::ungroup()
+# Filter to keep only cluster-condition pairs with at least 10 cells
+pairs_to_keep <- cell_counts %>%
+  dplyr::filter(n_cells >= 10)
+# Create a logical vector or list of cells to keep based on cluster and group
+cells_to_keep <- Endo@meta.data %>%
+  rownames_to_column("cell") %>%  # Convert rownames to a column for cell barcodes
+  dplyr::inner_join(pairs_to_keep, by = c("cluster", "group")) %>%
+  dplyr::pull(cell)  # Extract the cell barcodes from the matching rows
+# Subset the Seurat object based on cell barcodes
+Endo_HK_filtered <- subset(Endo, cells = cells_to_keep)
+
+clusters2 <- c("ENSSSAG00000072045","ENSSSAG00000007719","ENSSSAG00000084309",
+               "ENSSSAG00000045007","ENSSSAG00000073565","ENSSSAG00000043624",
+               "ENSSSAG00000108443","ENSSSAG00000067657","ENSSSAG00000042461",
+               "ENSSSAG00000120089","ENSSSAG00000001347","ENSSSAG00000048049",
+               "ENSSSAG00000101168","ENSSSAG00000040305",
+               "ENSSSAG00000073332","ENSSSAG00000075304","ENSSSAG00000107768",
+               "ENSSSAG00000068373","ENSSSAG00000116002",
+               "ENSSSAG00000098558","ENSSSAG00000071823","ENSSSAG00000078885");print(look.up.table$gene.name[match(clusters2,look.up.table$ensembl)])
+
+
+# Fetch data for your selected genes
+data <- FetchData(Endo_HK_filtered, vars = c(rev(clusters2), "ident", "group"))
+# Step 2: Calculate average expression and percentage expression
+# Group by clusters (identity)
+plot_data <- data %>%
+  group_by(ident,group) %>%
+  summarise_all(list(avg = ~ mean(.), pct = ~ sum(. > 0) / length(.) * 100))
+
+# Keep the suffixes '_avg' and '_pct' while replacing the Ensembl IDs with gene names
+colnames(plot_data)[-1] <- sapply(colnames(plot_data)[-1], function(col) {
+  suffix <- gsub(".*_(avg|pct)$", "\\1", col)  # Extract the suffix (_avg or _pct)
+  ensembl_id <- gsub("_(avg|pct)$", "", col)  # Remove the suffix to get the Ensembl ID
+  gene_name <- look.up.table$gene.name[match(ensembl_id, look.up.table$ensembl)]  # Get the gene name
+  paste(gene_name, suffix, sep = "_")  # Recombine the gene name with the suffix
+})
+
+# Check the updated column names
+colnames(plot_data)
+
+# Reshape the data for ggplot2, keeping 'ident' as the clustering variable
+plot_data_long <- plot_data %>%
+  pivot_longer(
+    cols = -c(ident,NA_group),  # All columns except 'ident'
+    names_to = c("gene", ".value"),  # Separate gene names and 'avg', 'pct'
+    names_sep = "_"  # The separator is the underscore
+  )
+
+# Check the reshaped data
+head(plot_data_long)
+
+# Create a factor for gene with specified order, reversed to start from the top
+plot_data_long$gene <- factor(plot_data_long$gene, levels = rev(look.up.table$gene.name[match(clusters2, look.up.table$ensembl)]))
+
+# Create the ggplot dot plot
+d6 <- ggplot(plot_data_long, aes(x = ident, y = gene)) +
+  geom_point(aes(size = pct, color = avg), shape = 16) +  # size by percentage, color by avg expression
+  scale_size(range = c(1, 10)) +  # Adjust the size range for dots
+  scale_color_gradient(low = "lightblue", high = "darkred") +  # Adjust color gradient
+  theme(
+    axis.text.y = element_text(size = 10, margin = margin(t = 0, b = 0)),
+    panel.spacing.y = unit(0.05, "lines"),
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),  # Set angle to 0 for horizontal labels
+  ) +
+  labs(size = "Percentage Expressed", color = "Avg Expression") +  # Add legends  
+  facet_wrap(~ NA_group)  # Split by 'group' column into multiple panels
+d6
+
+#correlation ENDO----------
+#Fig4 D
+
+#correlation with scellxsnuc
+# Load necessary libraries
+library(readr)
+library(ggplot2)
+library(reshape2)
+library(dplyr)
+library(readxl)
+
+#Load objects
+Endo_AvgEXP <- read_csv(here::here("test_integration","results_JAN24",
+                                   "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis",
+                                   "May26sun_EndoSUBres01",
+                                   "ISAVEXCLUDED_MAYENDOsub_res01_AvgEXP.csv"))
+
+Endo_AvgEXP <- Endo_AvgEXP %>% select(-`...1`)
+
+Supplementary_table_Reviewed <- read_excel("D:/Vetinst/Backup_28December2023/Reorganizing/Seq_Analysis/scell_snuc_Seurat4.1/Manuscript_FSIM/Resubmission_Dez2023/FSIM-D-23-01395/To resubmission/Supplementary table_Reviewed.xlsx", 
+                                           sheet = "Supplementary table 7")
+
+colnames(Supplementary_table_Reviewed)[11] <- "E1_2024"
+colnames(Supplementary_table_Reviewed)[12] <- "E2_2024"
+colnames(Supplementary_table_Reviewed)[13] <- "E3_2024"
+colnames(Supplementary_table_Reviewed)[14] <- "E4_2024"
+colnames(Supplementary_table_Reviewed)[15] <- "E5_2024"
+
+Supp_exp <- Supplementary_table_Reviewed %>%
+  select(gene, matches("E"))
+
+Endo_exp <- Endo_AvgEXP %>%
+  select(gene, starts_with("E"))
+
+# Join the two dataframes on `gene`
+average_expression2 <- Supp_exp %>%
+  inner_join(Endo_exp, by = "gene")
+
+# Compute the correlation matrix on the numeric columns only
+numeric_columns2 <- average_expression2 %>%
+  select(-c(gene,cluster, gene.name))  # Exclude `gene` for correlation
+
+correlation_matrix2 <- cor(numeric_columns2, use = "pairwise.complete.obs")
+
+# Print the correlation matrix
+print(correlation_matrix2)
+
+# Convert correlation matrix to long format for plotting
+correlation_lon2g <- melt(correlation_matrix2)
+
+# Plot correlation heatmap
+p1 <-ggplot(correlation_lon2g, aes(x = Var1, y = Var2, fill = value)) +
+  geom_tile() +
+  scale_fill_gradient2(low = "blue", high = "red", mid = "white", midpoint = 0) +
+  geom_text(aes(label = round(value, 2)), color = "black", size = 5, fontface = "bold") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1)) +
+  scale_x_discrete(limits = c("E1_2024", "E2_2024", "E3_2024", "E4_2024", "E5_2024")) +  # Set x-axis labels
+  scale_y_discrete(limits = c("E1", "E3", "E5", "E4", "E2", "E6")) 
+
+p1
+
+#Fig4 E------
+DefaultAssay(Endo) <- "RNA"
+# Retrieve the raw counts data
+raw_counts <- GetAssayData(Endo, slot = "counts")
+
+# Define the list of valid viral genes, excluding seg7ORF1
+valid_viral_genes <- c("seg1", "seg2", "seg3", "seg4", "seg5", "seg6", "seg7ORF2", "seg8ORF2")
+
+# Check if these genes exist in the dataset
+valid_viral_genes <- valid_viral_genes[valid_viral_genes %in% rownames(raw_counts)]
+
+# Calculate total viral counts for each cell using the valid viral genes
+viral_counts <- colSums(raw_counts[valid_viral_genes, ])
+viral_countsDF <- as.data.frame(viral_counts)
+viral_countsDF$Cell_Nameraw <- rownames(viral_countsDF)
+# Calculate the total counts for each cell (normalized data)
+total_counts <- colSums(raw_counts)
+total_countsDF <- as.data.frame(total_counts)
+total_countsDF$Cell_Nameraw <- rownames(total_countsDF)
+
+# Calculate the viral load percentage for each cell
+viral_load_percentage <- (viral_counts / total_counts) * 100
+
+# Add the viral load percentage to the Seurat object metadata
+Endo <- AddMetaData(Endo, metadata = viral_load_percentage, col.name = "Viral_Load_Percentage")
+# Add raw viral counts to cell metadata
+Endo$Viral_Raw_Counts <- viral_counts
+
+# Step 1: Filter the Seurat object based on Viral_Load_Percentage
+filtered_object <- subset(Endo, subset = Viral_Load_Percentage >= 1)
+
+# Extract UMAP coordinates
+umap_data <- Embeddings(Endo, reduction = "umap")
+umap_df <- as.data.frame(umap_data)
+umap_df$Highlight <- ifelse(Endo$Viral_Load_Percentage >= 1, "High", "Low")
+umap_df$Cluster <- Endo$cluster
+
+# Create the Highlight Plot
+highlight_plot <- ggplot(umap_df, aes(x = UMAP_1, y = UMAP_2, color = Highlight)) +
+  geom_point(size = 1, alpha = 0.7) +
+  scale_color_manual(values = c("High" = "blue", "Low" = "gray")) +
+  theme_void() +
+  theme(legend.position = "none")
+
+# Display the Highlight Plot
+print(highlight_plot)
+
+#Fig4 F------
+###onlyallsegmentsFEATUREPLOT-----------
+
+# Define the ISAV segments
+isav_segments <- c("seg1", "seg2", "seg3", "seg4", "seg5", "seg6", "seg7ORF2", "seg8ORF2")
+
+# Check if all ISAV segments are present in the dataset
+isav_segments_present <- isav_segments[isav_segments %in% rownames(filtered_object@assays$RNA@counts)]
+
+# Find cells expressing all ISAV segments
+expressing_all_segments <- colSums(filtered_object@assays$RNA@counts[isav_segments_present, ] > 0) == length(isav_segments_present)
+
+# Name the logical vector with cell names
+names(expressing_all_segments) <- colnames(filtered_object)
+
+# Add the logical vector as metadata to the Seurat object
+filtered_object <- AddMetaData(object = filtered_object, metadata = expressing_all_segments, col.name = "all_segments")
+
+# Filter for cells expressing all segments and group by 'group2' (v12 and v16)
+num_cells_expressing_all_by_group <- filtered_object@meta.data %>%
+  filter(all_segments == TRUE) %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(num_cells = n())
+
+# Print the result
+print(num_cells_expressing_all_by_group)
+
+# Step 2: Add a layer to highlight cells where all_segments is TRUE
+# Extract UMAP coordinates and metadata
+umap_data <- Embeddings(filtered_object, reduction = "umap")
+umap_df <- as.data.frame(umap_data)
+umap_df$all_segments <- filtered_object$all_segments
+
+# Create a separate data frame for highlighting
+highlight_df <- umap_df[umap_df$all_segments == TRUE, ]
+
+# Overlay the highlighting on the FeaturePlot
+highlight_plot2 <- highlight_plot + 
+  geom_point(data = highlight_df, aes(x = UMAP_1, y = UMAP_2), color = "red", size = 1, alpha = 0.5) 
+# Display the plot
+print(highlight_plot2)
+
+#FIG4 G---------
+# Subsetting the Seurat object to include only 'v12' and 'v16' samples
+Endo_virus <- subset(Endo, subset = group2 %in% c("v12", "v16"))
+
+# Retrieve the raw counts data
+raw_counts <- GetAssayData(Endo_virus, slot = "counts")
+
+# Define the list of valid viral genes, excluding seg7ORF1
+valid_viral_genes <- c("seg1", "seg2", "seg3", "seg4", "seg5", "seg6", "seg7ORF2", "seg8ORF2")
+
+# Check if these genes exist in the dataset
+valid_viral_genes <- valid_viral_genes[valid_viral_genes %in% rownames(raw_counts)]
+
+# Calculate total viral counts for each cell using the valid viral genes
+viral_counts <- colSums(raw_counts[valid_viral_genes, ])
+viral_countsDF <- as.data.frame(viral_counts)
+viral_countsDF$Cell_Nameraw <- rownames(viral_countsDF)
+# Calculate the total counts for each cell (normalized data)
+total_counts <- colSums(raw_counts)
+total_countsDF <- as.data.frame(total_counts)
+total_countsDF$Cell_Nameraw <- rownames(total_countsDF)
+
+# Calculate the viral load percentage for each cell
+viral_load_percentage <- (viral_counts / total_counts) * 100
+
+# Add the viral load percentage to the Seurat object metadata
+Endo_virus <- AddMetaData(Endo_virus, metadata = viral_load_percentage, col.name = "Viral_Load_Percentage")
+# Add raw viral counts to cell metadata
+Endo_virus$Viral_Raw_Counts <- viral_counts
+
+# Convert the metadata to a data frame if it's not already
+meta_data <- Endo_virus@meta.data
+
+# Filter cells with Viral_Raw_Counts greater than 0
+filtered_cells <- meta_data %>%
+  filter(Viral_Raw_Counts > 0)
+
+# Count the number of cells in each cluster
+cell_counts_per_cluster <- dplyr::summarize(
+  dplyr::group_by(filtered_cells, cluster),
+  count = dplyr::n(),
+  .groups = 'drop'
+)
+# Print the result
+print(cell_counts_per_cluster)
+
+###########-----
+# Filter cells with Viral_Load_Percentage greater than 1
+filtered_cells <- meta_data %>%
+  filter(Viral_Load_Percentage > 1)
+
+# Count the number of cells in each cluster----
+cell_counts_per_cluster <- filtered_cells %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(count = dplyr::n(), .groups = 'drop')
+
+
+# Print the result
+print(cell_counts_per_cluster)
+
+#####Total number 
+# Count the number of cells in each cluster
+cell_counts_per_cluster <- meta_data %>%
+  dplyr::group_by(cluster) %>%
+  dplyr::summarize(count =  dplyr::n(), .groups = 'drop')
+
+# Print the result
+print(cell_counts_per_cluster)
+
+# Count the total number of cells and the number of infected cells by cluster and group2--------
+cell_counts <- meta_data %>%
+  dplyr::group_by(cluster, group2) %>%
+  dplyr::summarize(
+    total_cells = dplyr::n(),
+    infected_cells = sum(Viral_Load_Percentage > 1),
+    .groups = 'drop'
+  )
+
+# Calculate the percentage of infected cells in each cluster and group2
+cell_counts <- cell_counts %>%
+  mutate(
+    percentage_infected = (infected_cells / total_cells) * 100
+  )
+# Count the total number of cells by group2 for population percentage calculation
+total_cells_by_group <- meta_data %>%
+  dplyr::group_by(group2) %>%
+  dplyr::summarize(
+    total_cells_group = n(),
+    .groups = 'drop'
+  )
+# Calculate the percentage of each cluster within each group2
+population_percentages <- cell_counts %>%
+  left_join(total_cells_by_group, by = "group2") %>%
+  mutate(
+    percentage_population = (total_cells / total_cells_group) * 100
+  )
+
+# Print the result
+print(population_percentages)
+# Filter data for each category
+# Data Preparation for day 12 and day 16
+data_day12 <- population_percentages %>% filter(grepl("12", group2))
+data_day16 <- population_percentages %>% filter(grepl("16", group2))
+
+# Function to create a grouped bar plot without borders
+create_grouped_bar_plot_no_borders <- function(data, day_label) {
+  ggplot(data, aes(x = cluster)) +
+    geom_bar(aes(y = total_cells, fill = "Total Cells"), 
+             stat = "identity", position = "dodge", width = 0.7, color = NA) +  # No border
+    geom_bar(aes(y = infected_cells, fill = "Infected Cells"), 
+             stat = "identity", position = "dodge", width = 0.7, alpha = 0.6, color = NA) +  # No border
+    geom_text(aes(y = total_cells + 50, 
+                  label = ifelse(percentage_infected > 0.9, paste0(round(percentage_infected), "%"), "")),
+              color = "black", size = 5, position = position_dodge(width = 1)) +
+    scale_fill_manual(values = c("Total Cells" = "lightgray", "Infected Cells" = "red")) +
+    labs(
+      title = paste("v", day_label, sep = ""),
+      x = "Cluster",
+      y = "Number of Cells",
+      fill = "Cell Type"
+    ) +
+    theme_minimal() +
+    theme(legend.position = "bottom",
+          axis.text.x = element_text(angle = 45, hjust = 1),
+          panel.grid = element_blank())  # Remove any grid lines
+}
+
+# Create plots for day 12 and day 16
+plot_day12 <- create_grouped_bar_plot_no_borders(data_day12, "12")+ 
+  theme(
+    axis.text.x = element_text(size = 16),  # Increase x-axis numbers
+    axis.text.y = element_text(size = 16)   # Increase y-axis numbers
+  )
+plot_day16 <- create_grouped_bar_plot_no_borders(data_day16, "16")+ 
+  theme(
+    axis.text.x = element_text(size = 16),  # Increase x-axis numbers
+    axis.text.y = element_text(size = 16)   # Increase y-axis numbers
+  )
+
+# Display the plots side by side
+grid.arrange(plot_day12, plot_day16, ncol = 2)
+# Combine the two plots into one
+combined_plot <- grid.arrange(plot_day12, plot_day16, ncol = 2)
+
+#Fig5 and Fig6 Go analysis---------------
+###ENDO subcluster
+#load file with DEGS from pseudobulk
+SUBpseudoDEG <- read_csv("test_integration/results_JAN24/All_samples_Int/ISAVEXCLUDED_May_2024_reanalysis/May26sun_EndoSUBres01/Pseudosubclusters_endo/Endosubcluster_pseudoDEGs_CtrlINF.csv")
+SUBpseudoDEG <- SUBpseudoDEG[,c(2,3,7,11,12)]
+SUBpseudoDEG <- SUBpseudoDEG %>%
+  group_by(ensembl, cluster) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+pseudo_clean_entrez <- left_join(SUBpseudoDEG, goterms_ssalar, by =c("ensembl"="GID"))
+
+# Remove duplicate genes within the same cluster and GO term
+pseudo_clean_entrez_unique <- pseudo_clean_entrez %>%
+  group_by(ensembl, cluster, GO) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+
+#It seems we get more terms with biomart. So I will use this
+Goterms <- left_join(SUBpseudoDEG, mart_export, by=c("ensembl" = "Gene.stable.ID"))
+Goterms <- Goterms[,c(1:5,9,10)]
+Goterms <- Goterms[complete.cases(Goterms$`GO.term.accession`),]
+Goterms_unique <- Goterms %>%
+  group_by(ensembl, cluster, GO.term.accession) %>%
+  dplyr::filter(row_number() == 1) %>%
+  ungroup()
+
+Endo_subCtrlINF <- readRDS(here::here("test_integration","results_JAN24",
+                                      "All_samples_Int",
+                                      "ISAVEXCLUDED_May_2024_reanalysis",
+                                      "May26sun_EndoSUBres01",
+                                      "Pseudosubclusters_endo",
+                                      "Endo_HK_subCtrlINF.RDS"))
+
+#Adding log average expression on the markers sheet
+int.avg <- AverageExpression(object = Endo_subCtrlINF, assays = 'RNA',slot = "data", return.seurat = T)
+int.avg <- as.data.frame(int.avg@assays[["RNA"]]@data)
+int.avg <- round(int.avg, digits = 3)
+int.avg <- rownames_to_column(int.avg, var = "ensembl")
+ans = int.avg[rowSums(int.avg[,c(2:4)])>0,]
+
+#Kegg analysis
+mart_exportentrezID <- read_csv("test_integration/results_JAN24/All_samples_Int/mart_exportentrezID.txt")
+colnames(mart_exportentrezID)[7] <- "entrezid"
+colnames(mart_exportentrezID)[1] <- "ensembl"
+test <- look.up.table2[complete.cases(look.up.table2$ncbi.id),]
+test2 <- mart_exportentrezID[complete.cases(mart_exportentrezID$entrezid),]
+test2 <- test2[!duplicated(test2[c(1)]),]
+ans <- left_join(ans,mart_exportentrezID)
+
+# #Define species to be analyzed
+OrgDb <- org.Ssalar.eg.db
+# OrgDb
+keytypes(OrgDb)
+
+#Read in list of all expressed genes and significant genes
+#All expressed genes
+universe_all<-ans[,c(1)]
+colnames(look.up.table)[1] <- "ensembl"
+names_all<-universe_all
+
+#Significant genes
+library(tidyr)
+library(dplyr)
+
+results1<- Goterms_unique
+results1 <- results1[,c(1,3,5,6)]
+
+results1_long <- results1
+results1_long <- results1_long[complete.cases(results1_long),]
+
+#write.csv(results1_long,file="longtable_resultssig.csv")
+#Make a list of DEGs
+geneList <- as.vector(results1_long$log2FoldChange)
+names(geneList) <- as.character(results1_long$ensembl)
+gene <- na.omit(as.character(results1$ensembl))
+geneList=sort(unlist(geneList), decreasing = TRUE)
+
+#subENDO_PLOT ALL GO----------
+formula_ALL_ss <- compareCluster(ensembl~cluster, data=results1_long, fun="enrichGO",
+                                 OrgDb=OrgDb, ont= "ALL", keyType='GID',
+                                 universe= names_all, pAdjustMethod = "BH",
+                                 pvalueCutoff = 0.05)
+head(as.data.frame(formula_ALL_ss))
+
+#simplified
+MF2 <- clusterProfiler::simplify(formula_ALL_ss, cutoff=0.8, by="p.adjust",measure= "Wang",select_fun=min)
+MF2<- as.data.frame(MF2)
+# Filter for BP and MF terms only
+MF2 <- MF2 %>%
+  filter(ONTOLOGY %in% c("BP", "MF"))
+
+ego4 <- mutate(MF2, FoldEnrichment = parse_ratio(GeneRatio)/ parse_ratio(BgRatio))
+ego4<- as.data.frame(ego4)
+
+# Filter the dataframe for the specified cluster
+filtered_data <- ego4[ego4$Cluster == 'E1.E3_vs_E1c', ]
+
+# Reorder Description based on Count and ONTOLOGY
+filtered_data$Description <- factor(filtered_data$Description, 
+                                    levels = filtered_data[order(filtered_data$ONTOLOGY,
+                                                                 -filtered_data$Count),
+                                                           "Description"])
+#Fig 5C-------
+allgp4 <-ggplot(filtered_data, showCategory = 10,
+                aes(FoldEnrichment, fct_reorder(Description, FoldEnrichment))) +
+  geom_segment(aes(xend=0, yend = Description)) +
+  geom_point(aes(color=p.adjust, size = Count)) +
+  scale_color_gradientn(colours=c("#f7ca64", "#46bac2", "#7e62a3"),
+                        trans = "log10",
+                        guide=guide_colorbar(reverse=TRUE, order=1)) +
+  scale_size_continuous(range=c(2, 10)) +
+  theme_dose(12) +
+  xlab("Fold Enrichment")
+allgp4 <- allgp4 + facet_grid(~ ONTOLOGY, scales = "free") +
+  theme(
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16)   # Facet strip text
+  )
+allgp4
+
+#Fig 6C--------
+filtered_data <- ego4[ego4$Cluster == 'E5_vs_E1c', ]
+
+# Reorder Description based on Count and ONTOLOGY
+
+filtered_data$Description <- factor(filtered_data$Description, 
+                                    levels = filtered_data[order(filtered_data$ONTOLOGY,
+                                                                 -filtered_data$Count),
+                                                           "Description"])
+
+allgp5 <-ggplot(filtered_data, showCategory = 10,
+                aes(FoldEnrichment, fct_reorder(Description, FoldEnrichment))) +
+  geom_segment(aes(xend=0, yend = Description)) +
+  geom_point(aes(color=p.adjust, size = Count)) +
+  scale_color_gradientn(colours=c("#f7ca64", "#46bac2", "#7e62a3"),
+                        trans = "log10",
+                        guide=guide_colorbar(reverse=TRUE, order=1)) +
+  scale_size_continuous(range=c(2, 10)) +
+  theme_dose(12) +
+  xlab("Fold Enrichment")
+allgp5 <- allgp5 + facet_grid(~ ONTOLOGY, scales = "free") +
+  theme(
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16)   # Facet strip text
+  )
+allgp5
+
+#Fig6 E
+filtered_data <- ego4[ego4$Cluster == 'E5_vs_E1.E3', ]
+
+# Reorder Description based on Count and ONTOLOGY
+filtered_data$Description <- factor(filtered_data$Description, 
+                                    levels = filtered_data[order(filtered_data$ONTOLOGY,
+                                                                 -filtered_data$Count),
+                                                           "Description"])
+allgp6 <-ggplot(filtered_data, showCategory = 10,
+                aes(FoldEnrichment, fct_reorder(Description, FoldEnrichment))) +
+  geom_segment(aes(xend=0, yend = Description)) +
+  geom_point(aes(color=p.adjust, size = Count)) +
+  scale_color_gradientn(colours=c("#f7ca64", "#46bac2", "#7e62a3"),
+                        trans = "log10",
+                        guide=guide_colorbar(reverse=TRUE, order=1)) +
+  scale_size_continuous(range=c(2, 10)) +
+  theme_dose(12) +
+  xlab("Fold Enrichment")
+allgp6 <- allgp6 + facet_grid(~ ONTOLOGY, scales = "free") +
+  theme(
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16)   # Facet strip text
+  )
+allgp6
+
+
+#Fig6 F--------
+# Loss of endothelial/scavenger identity
+loss_scav_identity <- c("ENSSSAG00000083641", "ENSSSAG00000115237", "ENSSSAG00000051277", 
+                        "ENSSSAG00000120844", "ENSSSAG00000045007",
+                        "ENSSSAG00000043624")
+
+# Fetch data for your selected genes
+data <- FetchData(Endo_HK_filtered, vars = c(rev(loss_scav_identity), "ident", "group"))
+# Step 2: Calculate average expression and percentage expression
+# Group by clusters (identity)
+plot_data <- data %>%
+  group_by(ident,group) %>%
+  summarise_all(list(avg = ~ mean(.), pct = ~ sum(. > 0) / length(.) * 100))
+
+# Keep the suffixes '_avg' and '_pct' while replacing the Ensembl IDs with gene names
+colnames(plot_data)[-1] <- sapply(colnames(plot_data)[-1], function(col) {
+  suffix <- gsub(".*_(avg|pct)$", "\\1", col)  # Extract the suffix (_avg or _pct)
+  ensembl_id <- gsub("_(avg|pct)$", "", col)  # Remove the suffix to get the Ensembl ID
+  gene_name <- look.up.table$gene.name[match(ensembl_id, look.up.table$ensembl)]  # Get the gene name
+  paste(gene_name, suffix, sep = "_")  # Recombine the gene name with the suffix
+})
+
+# Check the updated column names
+colnames(plot_data)
+
+# Reshape the data for ggplot2, keeping 'ident' as the clustering variable
+plot_data_long <- plot_data %>%
+  pivot_longer(
+    cols = -c(ident,NA_group),  # All columns except 'ident'
+    names_to = c("gene", ".value"),  # Separate gene names and 'avg', 'pct'
+    names_sep = "_"  # The separator is the underscore
+  )
+
+# Check the reshaped data
+head(plot_data_long)
+
+# Create a factor for gene with specified order, reversed to start from the top
+plot_data_long$gene <- factor(plot_data_long$gene,
+                              levels = rev(look.up.table$gene.name[match(loss_scav_identity,
+                                                                         look.up.table$ensembl)]))
+# Create the ggplot dot plot
+d2 <- ggplot(plot_data_long, aes(x = ident, y = gene)) +
+  geom_point(aes(size = pct, color = avg), shape = 16) +  # size by percentage, color by avg expression
+  scale_size(range = c(1, 10)) +  # Adjust the size range for dots
+  scale_color_gradient(low = "lightblue", high = "darkred") +  # Adjust color gradient
+  theme(
+    axis.text.y = element_text(size = 10, margin = margin(t = 0, b = 0)),
+    panel.spacing.y = unit(0.05, "lines"),
+    text = element_text(size = 14),      # Adjust this value for overall text size
+    axis.title = element_text(size = 16), # Axis titles
+    axis.title.y = element_blank() ,
+    axis.text = element_text(size = 14),  # Axis text
+    strip.text = element_text(size = 16),
+    axis.text.x = element_text(angle = 0, hjust = 0.5),  # Set angle to 0 for horizontal labels
+  ) +
+  labs(size = "Percentage Expressed", color = "Avg Expression") +  # Add legends  
+  facet_wrap(~ NA_group)  # Split by 'group' column into multiple panels
+d2
+
+
+#SUPPLEMENTARY
+
+#FigS1
+int<- as.data.frame(integrate_fifthannot@meta.data)
+# Group by the new 'sample' column and 'cluster' column, then summarize the counts
+counts_int <- group_by(int, orig.ident, cluster) %>% dplyr::summarise(count = n())
+
+# Calculate percentages within each group
+df <- within(counts_int, {
+  percent <- count / ave(count, orig.ident, FUN = sum) * 100
+  percent <- round(percent)  # Round the percentages to integers
+})
+
+# Filter out rows where percent is zero
+df_filtered <- df[df$percent != 0, ]
+# Create a mapping table to rename `orig.ident`
+rename_map <- data.frame(
+  orig.ident = c("A1", "A2", "A3", "A4", "A5", "A6", "A7", "A8", "A9", "A10", "A11", "A12"),
+  new_name = c("F1ctrl12", "F7v12", "F8v12", "F4ctrl16", "F10v16", "F11v16", "F2ctrl12", 
+               "F5ctrl16", "F9v12", "F3ctrl12", "F6ctrl16", "F12v16")
+)
+
+# Merge to rename `orig.ident` to `new_name`
+df_filtered <- merge(df_filtered, rename_map, by = "orig.ident")
+
+# Define the exact order for `new_name`
+desired_order <- c("F1ctrl12", "F2ctrl12", "F3ctrl12", "F4ctrl16", 
+                   "F5ctrl16", "F6ctrl16", "F7v12", "F8v12", "F9v12", 
+                   "F10v16", "F11v16", "F12v16")
+# Set `new_name` as a factor with the desired levels
+df_filtered$new_name <- factor(df_filtered$new_name, levels = desired_order)
+# Plot the stacked bar plot
+p <- df_filtered %>%
+  na.omit() %>%
+  ggplot(aes(x = new_name, y = percent, fill = cluster)) +  # Stacked by 'sample'
+  geom_bar(stat = "identity") +
+  scale_fill_manual(values = my_colors) +  # Apply your custom colors
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +  # Rotate x-axis labels
+  labs(y = "Percentage", x = "Sample", fill = "Cluster") +  # Label the axes and legend
+  geom_text(aes(label = paste0(round(percent), "%")), position = position_stack(vjust = 0.5), size = 3)  # Add percentage labels
+
+# Display the plot
+print(p)
+#fig2C
+Pop_markers <- c("ENSSSAG00000113980","ENSSSAG00000079780","ENSSSAG00000065541","ENSSSAG00000116510", #bcells
+                 "ENSSSAG00000040305","ENSSSAG00000083641","ENSSSAG00000046825","ENSSSAG00000062927", #endo
+                 "ENSSSAG00000045065", "ENSSSAG00000044737","ENSSSAG00000046758", "ENSSSAG00000078696",#erythrocytes
+                 "ENSSSAG00000069874","ENSSSAG00000041566","ENSSSAG00000070495","ENSSSAG00000048994",#granulocytes
+                 "ENSSSAG00000065168", "ENSSSAG00000066926", "ENSSSAG00000100175","ENSSSAG00000003744",#hematopoietic
+                 "ENSSSAG00000009941","ENSSSAG00000103639","ENSSSAG00000106674","ENSSSAG00000036512",#interrenal
+                 "ENSSSAG00000069947","ENSSSAG00000067809","ENSSSAG00000040824","ENSSSAG00000030734",#mesenchymal
+                 "ENSSSAG00000002454","ENSSSAG00000065535","ENSSSAG00000076214","ENSSSAG00000043967", #mononuclear phagocytes
+                 "ENSSSAG00000002801","ENSSSAG00000064246","ENSSSAG00000079094","ENSSSAG00000117352",#NK cells
+                 "ENSSSAG00000076824","ENSSSAG00000006857","ENSSSAG00000083857","ENSSSAG00000098580",#Tcells
+                 "ENSSSAG00000006421","ENSSSAG00000044089","ENSSSAG00000028016","ENSSSAG00000050579"#,#Thrombocytes
+                 #"seg1","seg2","seg3","seg4","seg5","seg6","seg7ORF2","seg8ORF2"#Virus
+);print(look.up.table$gene.name[match(Pop_markers,look.up.table$ensembl.id)])
+pop_markers_df <- as.data.frame(Pop_markers)
+merged_data <- left_join(pop_markers_df, look.up.table2, by = c("Pop_markers"="ensembl.id"))
+# Load the package
+library(openxlsx)
+
+# supplementary figures-----
+
+
+#S3 A Fig
+source(here::here("scripts","general","SplitCluster.R")) 
+# Add 'active.ident' as a new column in the metadata
+endo.split2 <- SplitCluster(Endo,split=2, cluster= "E4"
+                            , reduction = "harmony",  harmony = TRUE,group.by = "group")
+UMAPPlot(endo.split2, pt.size=1,label = T,label.size = 5)&NoLegend()
+
+endo.split2$cluster2 <- Idents(endo.split2)
+head(endo.split2@meta.data)
+
+# Define your color palette
+colors <- c("E1" = "#ff7f0e",
+            "E2" = "#1f77b4",
+            "E3" = "#2ca02c",
+            "E4.0" = "#7a4b9a",
+            "E4.1" = "#b08cd1",
+            "E5" = "#d62728",
+            "E6" = "#e377c2")
+
+p1 <-UMAPPlot(endo.split2, pt.size=1,label = T,label.size = 5, cols=colors)&NoLegend()
+p1
+
+
+#S3 B Fig
+e4marker <- c("ENSSSAG00000048049","ENSSSAG00000042461","ENSSSAG00000101168",
+              "ENSSSAG00000108070");print(look.up.table$gene.name[match(e4marker,look.up.table$ensembl)])
+p2 <- FeaturePlot(endo.split2, features = e4marker)
+p2
+
+
+#S4 Fig
+# Subset cluster E1 under control condition
+E1_virus <- subset(Endo, idents = "E1", subset = condition == "Virus")
+E3_virus <- subset(Endo, idents = "E3", subset = condition == "Virus")
+E5_virus <- subset(Endo, idents = "E5", subset = condition == "Virus")
+
+# Merge the subsets into a single Seurat object
+#Cluster E1 from Control
+Endopseudo <- merge(E1_virus, 
+                    y = list(E3_virus, E5_virus))
+
+#Need to perform this on combine before Harmony
+Endopseudo <- NormalizeData(Endopseudo, verbose = F)
+Endopseudo <- FindVariableFeatures(Endopseudo, selection.method = "vst", nfeatures = 3000, verbose = F)
+Endopseudo <- ScaleData(Endopseudo, verbose = F)
+Endopseudo <- RunPCA(Endopseudo, npcs = 40, verbose = F)
+
+#Remove batch with Harmony. If it does not converge try increasing max.iter.harmony parameter to 15 or 20.
+Endopseudo <- RunHarmony(Endopseudo,group.by.vars = c("dataset"),
+                         plot_convergence = TRUE,assay.use = "RNA", max.iter.harmony= 20)
+#Post batch correction
+ElbowPlot(Endopseudo, ndims = 40, reduction = "harmony")
+Endopseudo[["harmony"]]@stdev
+# Determine percent of variation associated with each PC
+pct <- Endopseudo[["harmony"]]@stdev / sum(Endopseudo[["harmony"]]@stdev) * 100
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+# Determine which PC exhibits cumulative percent greater than 90% and %
+#variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+co1
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+# last point where change of % of variation is more than 0.1%.
+co2
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+pcs
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct,
+                      cumu = cumu,
+                      rank = 1:length(pct))
+
+# Elbow plot to visualize
+ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) +
+  geom_text() +
+  geom_vline(xintercept = 90, color = "grey") +
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw(base_size = 22)
+
+#Post batch correction
+Endopseudo <- RunUMAP(Endopseudo,seed.use = 488,dims = 1:34,reduction = "harmony")
+
+UMAPPlot(Endopseudo, pt.size=0.5,label = TRUE,group.by = "group")
+UMAPPlot(Endopseudo, pt.size=1,label = TRUE,repel=T)& NoLegend()
+
+# Define the colors
+colors <- c("E1" ="#ff7f0e" , "E2" ="#1f77b4" , "E3" = "#2ca02c", "E4" = "#9467bd", "E5" ="#d62728" , "E6" = "#e377c2")
+col.dataset = c("#f95b0b","#20709E","#831aeb") 
+col.dataset2 = c("#f2b494","#f95b0b","#20709E","#831aeb")
+col.dataset3 = c("#f9ab0b","#20909e")
+
+#UMAP
+Endo_HK_fig <- UMAPPlot(Endopseudo, 
+                        pt.size=1.5,
+                        label = TRUE, 
+                        repel=T, 
+                        label.size = 5, cols= colors) & NoLegend()
+
+Endo_HK_fig
