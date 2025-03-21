@@ -1,0 +1,440 @@
+library(Seurat)
+library(dplyr)
+library(plyr)
+library(ggplot2)
+library(cowplot)
+library(harmony)
+library(ggpubr)
+library(tidyverse)
+library(scDblFinder)
+library(RColorBrewer)
+library(SCpubr)
+
+# Record start time-----
+start_time <- Sys.time()
+
+set.seed(123)
+#Load gene table and functions
+source(here::here("scripts","general","AnnotateCluster_2.R")) # AnnotateClusters()
+look.up.table <- read.csv(here::here("scripts", "general","s_salar_ensembl_106_gene_data_added_ISAV.csv"),header = T)
+integrate_noISAV <- readRDS(here::here("test_integration","results_JAN24","All_samples_Int",
+                                       "ISAVEXCLUDED_May_2024_reanalysis","May26sun_Integrate","ISAVEXCLUDED_MAYintegrate2.RDS"))
+integrate_fifthannot <- readRDS(here::here("test_integration","results_JAN24","All_samples_Int",
+                                       "ISAVEXCLUDED_May_2024_reanalysis","May26sun_Integrate","ISAVEXCLUDED_MAYintegrate.RDS"))
+#Specify colour scheme
+col.dataset = c("#f95b0b","#20709E","#831aeb") 
+col.dataset2 = c("#f2b494","#f95b0b","#20709E","#831aeb")
+col.dataset3 = c("#f9ab0b","#20909e")
+
+#Load integrate_noISAV datasets.
+int <- readRDS(here::here("test_integration","results_JAN24","ctrlIntegrated.RDS"))
+
+virus12 <- readRDS(here::here("test_integration","objects","Obj_Integrating","NOV_virus12.RDS"))
+virus12$condition <- ifelse(virus12$dataset == "A2", "Virus",
+                  ifelse(virus12$dataset == "A3", "Virus",
+                         ifelse(virus12$dataset == "A9","Virus",NA)))
+
+
+virus16 <- readRDS(here::here("test_integration","objects","Obj_Integrating","NOV_virus16.RDS"))
+virus16$condition <- ifelse(virus16$dataset == "A5", "Virus",
+                            ifelse(virus16$dataset == "A6", "Virus",
+                                   ifelse(virus16$dataset == "A12","Virus",NA)))
+#Combine without batch correction.
+integrate_noISAV <- merge(x=int,y=c(virus12,virus16), merge.data = TRUE)
+
+integrate_noISAV$day <- ifelse(integrate_noISAV$dataset == "A1", "12",
+                        ifelse(integrate_noISAV$dataset == "A2", "12",
+                               ifelse(integrate_noISAV$dataset == "A3", "12",
+                                      ifelse(integrate_noISAV$dataset == "A7", "12",
+                                             ifelse(integrate_noISAV$dataset == "A9", "12",
+                                                    ifelse(integrate_noISAV$dataset == "A10", "12",
+                                                           ifelse(integrate_noISAV$dataset == "A4", "16",
+                                                                  ifelse(integrate_noISAV$dataset == "A5", "16",
+                                                                         ifelse(integrate_noISAV$dataset == "A6", "16",
+                                                                                ifelse(integrate_noISAV$dataset == "A8", "16",
+                                                                                       ifelse(integrate_noISAV$dataset == "A11", "16",
+                                                                                              ifelse(integrate_noISAV$dataset == "A12", "16",NA))))))))))))
+integrate_noISAV$group <- ifelse(integrate_noISAV$condition == "Control", "ctrl",
+                          ifelse(integrate_noISAV$condition == "Virus" & integrate_noISAV$day == 12, 'v12',
+                                 ifelse(integrate_noISAV$condition == "Virus" & integrate_noISAV$day == 16, 'v16',NA)))
+integrate_noISAV$group2 <- ifelse(integrate_noISAV$condition == "Control" & integrate_noISAV$day == 12, 'ctrl12',
+                           ifelse(integrate_noISAV$condition == "Control" & integrate_noISAV$day == 16, 'ctrl16',
+                                  ifelse(integrate_noISAV$condition == "Virus" & integrate_noISAV$day == 12, 'v12',
+                                         ifelse(integrate_noISAV$condition == "Virus" & integrate_noISAV$day == 16, 'v16',NA))))
+isav_markers <- c("PB2", "PB1", "NP",  "PA",  "F" ,  "HE" , "NS" , "M" )
+
+#integrate_noISAV <- subset(integrate_noISAV,features=setdiff(rownames(integrate_noISAV),isav_markers))
+# Exclude the virus genes from the integrated Seurat object
+integrate_noISAV  <- subset(integrate_noISAV, features = !VariableFeatures(integrate_noISAV) %in% isav_markers)
+#Remove mt.genes
+mt.genes = c("ENSSSAG00000000007","ENSSSAG00000000011","ENSSSAG00000000017",
+             "ENSSSAG00000000020","ENSSSAG00000000022","ENSSSAG00000000023",
+             "ENSSSAG00000000024","ENSSSAG00000000026","ENSSSAG00000000028",
+             "ENSSSAG00000000029","ENSSSAG00000000033","ENSSSAG00000000034",
+             "ENSSSAG00000000036")
+
+#Remove mt.genes that are not present in the seurat A2 i.e. are expressed in too few cells so was filtered out in "CreateSeuratA2" function above
+mt.genes.present <- mt.genes[mt.genes %in% rownames(integrate_noISAV@assays$RNA@counts)]
+print(paste0(length(mt.genes.present),"/",length(mt.genes), " mito genes present in the count matrix"))
+
+#Ribosomal content
+rbgenes <- read.table(here::here("scripts","adriana_test","rbgenes_Ssalar.csv"),sep = ",", header = TRUE)
+ribo.genes <- rbgenes[,1]
+ribo.genes.present <- ribo.genes[ribo.genes %in% rownames(integrate_noISAV@assays$RNA@counts)]
+print(paste0(length(ribo.genes.present),"/",length(ribo.genes), " ribo genes present in the count matrix"))
+
+#Calculate % with Seurat function
+integrate_noISAV <- PercentageFeatureSet(integrate_noISAV,features = mt.genes.present,col.name = "percent.mt")
+integrate_noISAV <- PercentageFeatureSet(integrate_noISAV,features = ribo.genes.present,col.name = "percent.ribo")
+
+p1 <- VlnPlot(integrate_noISAV,features = c("percent.mt"),pt.size = 0) + geom_hline(yintercept = 5) + NoLegend()
+p2 <- VlnPlot(integrate_noISAV,features = c("percent.ribo"),pt.size = 0) + geom_hline(yintercept = 2.5) + NoLegend()
+p3 <- VlnPlot(integrate_noISAV,features = c("nFeature_RNA"),pt.size = 0,y.max = 20000) + geom_hline(yintercept = 5000) + NoLegend()
+p4 <- VlnPlot(integrate_noISAV,features = c("nCount_RNA"),pt.size = 0,y.max = 30000) + geom_hline(yintercept = 7000) + NoLegend()
+plot_grid(p1,p2,p3,p4,nrow = 2)
+plot2 <- FeatureScatter(integrate_noISAV, feature1 = "nCount_RNA", feature2 = "nFeature_RNA")
+plot2 + geom_hline(yintercept=7000)+
+  geom_vline(xintercept=16000)
+poor.quality.cells_integrate_noISAV <- WhichCells(integrate_noISAV)[integrate_noISAV@meta.data$percent.mt > 5 | integrate_noISAV@meta.data$percent.ribo > 2.5 | integrate_noISAV@meta.data$nFeature_RNA > 7000 | integrate_noISAV@meta.data$nCount_RNA > 16000]
+print(length(poor.quality.cells_integrate_noISAV))
+
+#testing markers expression for bad populations
+integrate_noISAV <- subset(integrate_noISAV, cells = poor.quality.cells_integrate_noISAV, invert = TRUE)
+
+#Normalization
+integrate_noISAV <- NormalizeData(integrate_noISAV)
+DefaultAssay(integrate_noISAV) <- "RNA"
+integrate_noISAV <- FindVariableFeatures(integrate_noISAV, selection.method = "vst", nfeatures = 3000, verbose = F)
+integrate_noISAV <- ScaleData(integrate_noISAV, verbose = F)
+integrate_noISAV <- RunPCA(integrate_noISAV, npcs = 30, verbose = F)
+integrate_noISAV <- RunUMAP(integrate_noISAV, reduction = "pca", dims = 1:30, verbose = F)
+
+DimPlot(integrate_noISAV,reduction = "umap",pt.size = 1)
+
+#Remove batch with Harmony. If it does not converge try increasing max.iter.harmony parameter to 15 or 20.
+integrate_noISAV <- RunHarmony(integrate_noISAV,group.by.vars = c("dataset"),plot_convergence = TRUE,assay.use = "RNA")
+
+#Post batch correction
+ElbowPlot(integrate_noISAV, ndims = 40, reduction = "harmony")
+integrate_noISAV[["harmony"]]@stdev
+# Determine percent of variation associated with each PC
+pct <- integrate_noISAV[["harmony"]]@stdev / sum(integrate_noISAV[["harmony"]]@stdev) * 100
+
+# Calculate cumulative percents for each PC
+cumu <- cumsum(pct)
+
+# Determine which PC exhibits cumulative percent greater than 90% and %
+#variation associated with the PC as less than 5
+co1 <- which(cumu > 90 & pct < 5)[1]
+
+co1
+# Determine the difference between variation of PC and subsequent PC
+co2 <- sort(which((pct[1:length(pct) - 1] - pct[2:length(pct)]) > 0.1), decreasing = T)[1] + 1
+
+# last point where change of % of variation is more than 0.1%.
+co2
+
+# Minimum of the two calculation
+pcs <- min(co1, co2)
+pcs
+# Create a dataframe with values
+plot_df <- data.frame(pct = pct,
+                      cumu = cumu,
+                      rank = 1:length(pct))
+
+# Elbow plot to visualize
+ggplot(plot_df, aes(cumu, pct, label = rank, color = rank > pcs)) +
+  geom_text() +
+  geom_vline(xintercept = 90, color = "grey") +
+  geom_hline(yintercept = min(pct[pct > 5]), color = "grey") +
+  theme_bw(base_size = 22)
+
+#Post batch correction
+integrate_noISAV <- RunUMAP(integrate_noISAV,seed.use = 488,dims = 1:25,reduction = "harmony")
+
+UMAPPlot(integrate_noISAV, pt.size=0.5,label = TRUE,group.by = "dataset")
+UMAPPlot(integrate_noISAV, pt.size=0.5,label = TRUE,repel=T)& NoLegend()
+
+#Now repeat code from initial qc steps i.e. define markers,cluster high resolution and automatically annotate
+integrate_noISAV <- FindNeighbors(integrate_noISAV, dims = 1:25,reduction = "harmony")
+integrate_noISAV <- FindClusters(integrate_noISAV,resolution = 8)
+
+#Check UMAP
+UMAPPlot(integrate_noISAV, pt.size=0.5,label = TRUE,repel=T)& NoLegend()
+
+# ################ Annotation ################ 
+markers.mps <- c("ENSSSAG00000002454","ENSSSAG00000065535","ENSSSAG00000076214",
+                 "ENSSSAG00000061479","ENSSSAG00000057796", "ENSSSAG00000084922", "ENSSSAG00000078459",
+                 "ENSSSAG00000001216", "ENSSSAG00000086256","ENSSSAG00000063553",
+                 "ENSSSAG00000094410", "ENSSSAG00000026315", "ENSSSAG00000062736","ENSSSAG00000009796");print(look.up.table$gene.name[match(markers.mps,look.up.table$ensembl.id)])
+
+markers.b <- c("ENSSSAG00000113980","ENSSSAG00000079780","ENSSSAG00000065613",
+               "ENSSSAG00000070298","ENSSSAG00000119971","ENSSSAG00000065541","ENSSSAG00000070298",
+               "ENSSSAG00000104911","ENSSSAG00000004970",
+               "ENSSSAG00000049747", "ENSSSAG00000075019", "ENSSSAG00000116510", "ENSSSAG00000004118", 
+               "ENSSSAG00000009589");print(look.up.table$gene.name[match(markers.b,look.up.table$ensembl.id)])
+
+markers.end <- c("ENSSSAG00000001494","ENSSSAG00000067902","ENSSSAG00000045007",
+                 "ENSSSAG00000088534","ENSSSAG00000040305","ENSSSAG00000083641","ENSSSAG00000046825",
+                 "ENSSSAG00000062927","ENSSSAG00000066215",
+                 "ENSSSAG00000073565", "ENSSSAG00000095197", "ENSSSAG00000074733", "ENSSSAG00000047898",
+                 "ENSSSAG00000071149", "ENSSSAG00000079118", "ENSSSAG00000118822", "ENSSSAG00000012320", "ENSSSAG00000008829",
+                 "ENSSSAG00000101595", "ENSSSAG00000120844", "ENSSSAG00000119915", "ENSSSAG00000073155");print(look.up.table$gene.name[match(markers.end,look.up.table$ensembl.id)])
+
+markers.gra <- c("ENSSSAG00000069874","ENSSSAG00000082290","ENSSSAG00000072134","ENSSSAG00000081699",
+                 "ENSSSAG00000070495","ENSSSAG00000071855","ENSSSAG00000055699", "ENSSSAG00000025124", "ENSSSAG00000095867",
+                 "ENSSSAG00000038140");print(look.up.table$gene.name[match(markers.gra,look.up.table$ensembl.id)])
+
+markers.hsc <- c("ENSSSAG00000065168", "ENSSSAG00000066926", "ENSSSAG00000059137", "ENSSSAG00000003744",
+                 "ENSSSAG00000100175", "ENSSSAG00000005642", "ENSSSAG00000031145");print(look.up.table$gene.name[match(markers.hsc,look.up.table$ensembl.id)])
+
+markers.int <- c("ENSSSAG00000009941","ENSSSAG00000111310","ENSSSAG00000103639","ENSSSAG00000070653",
+                 "ENSSSAG00000009209",
+                 "ENSSSAG00000109324","ENSSSAG00000106674","ENSSSAG00000075313","ENSSSAG00000004083","ENSSSAG00000068626","ENSSSAG00000074052","ENSSSAG00000036512",
+                 "ENSSSAG00000065510","ENSSSAG00000007492","ENSSSAG00000041623","ENSSSAG00000069380","ENSSSAG00000115399","ENSSSAG00000055312","ENSSSAG00000072340",
+                 "ENSSSAG00000041954","ENSSSAG00000053929","ENSSSAG00000086140","ENSSSAG00000121237","ENSSSAG00000043747",
+                 "ENSSSAG00000053824","ENSSSAG00000067287");print(look.up.table$gene.name[match(markers.int,look.up.table$ensembl.id)])
+
+markers.mes <- c("ENSSSAG00000069947","ENSSSAG00000108555",
+                 "ENSSSAG00000003409","ENSSSAG00000081483",
+                 "ENSSSAG00000005466","ENSSSAG00000046962","ENSSSAG00000067809","ENSSSAG00000059317","ENSSSAG00000040824","ENSSSAG00000101700","ENSSSAG00000010137",
+                 "ENSSSAG00000103244","ENSSSAG00000075851","ENSSSAG00000045616","ENSSSAG00000077859","ENSSSAG00000068865",
+                 "ENSSSAG00000046194","ENSSSAG00000030734");print(look.up.table$gene.name[match(markers.mes,look.up.table$ensembl.id)])
+
+markers.nk <- c("ENSSSAG00000002801","ENSSSAG00000045605","ENSSSAG00000094838",
+                "ENSSSAG00000079094","ENSSSAG00000117352","ENSSSAG00000009129","ENSSSAG00000043118",
+                "ENSSSAG00000006495","ENSSSAG00000096357",
+                "ENSSSAG00000107914", "ENSSSAG00000052644" ,"ENSSSAG00000074448", "ENSSSAG00000108168",
+                "ENSSSAG00000080648",  "ENSSSAG00000107923", "ENSSSAG00000078545", "ENSSSAG00000009327" );print(look.up.table$gene.name[match(markers.nk,look.up.table$ensembl.id)])
+
+markers.thr <- c("ENSSSAG00000006058","ENSSSAG00000006421","ENSSSAG00000044089","ENSSSAG00000008339",
+                 "ENSSSAG00000028016","ENSSSAG00000050579",
+                 "ENSSSAG00000075827", "ENSSSAG00000007509",
+                 "ENSSSAG00000046830","ENSSSAG00000045689","ENSSSAG00000043349","ENSSSAG00000086843","ENSSSAG00000002676",
+                 "ENSSSAG00000096562","ENSSSAG00000118808","ENSSSAG00000058403","ENSSSAG00000006344" ,
+                 "ENSSSAG00000063282","ENSSSAG00000074001","ENSSSAG00000092078");print(look.up.table$gene.name[match(markers.thr,look.up.table$ensembl.id)])
+
+markers.hemo <- c("ENSSSAG00000103747","ENSSSAG00000088798", "ENSSSAG00000095264","ENSSSAG00000045065", "ENSSSAG00000065233", 
+                  "ENSSSAG00000044737","ENSSSAG00000048536", "ENSSSAG00000061234");print(look.up.table$gene.name[match(markers.hemo,look.up.table$ensembl.id)])
+
+markers.othersRBC <- c("ENSSSAG00000068428","ENSSSAG00000047949","ENSSSAG00000099637","ENSSSAG00000064240",
+                  "ENSSSAG00000003968","ENSSSAG00000064777","ENSSSAG00000001877","ENSSSAG00000087439",
+                  "ENSSSAG00000053130", "ENSSSAG00000078696", "ENSSSAG00000072430");print(look.up.table$gene.name[match(markers.othersRBC,look.up.table$ensembl.id)])
+
+markers.t <- c("ENSSSAG00000076824","ENSSSAG00000006857","ENSSSAG00000064204",
+               "ENSSSAG00000058389","ENSSSAG00000083857","ENSSSAG00000079285",
+               "ENSSSAG00000071984", "ENSSSAG00000081128", "ENSSSAG00000068132", "ENSSSAG00000047199", "ENSSSAG00000081821",
+               "ENSSSAG00000066533", "ENSSSAG00000072349", "ENSSSAG00000045088", "ENSSSAG00000077687", "ENSSSAG00000040361");print(look.up.table$gene.name[match(markers.t,look.up.table$ensembl.id)])
+
+markers.t.gd <- c("ENSSSAG00000058488","ENSSSAG00000087751",
+                  "ENSSSAG00000079702","ENSSSAG00000057029","ENSSSAG00000072601", "ENSSSAG00000059232", "ENSSSAG00000102087", "ENSSSAG00000065004", "ENSSSAG00000002046",
+                  "ENSSSAG00000086926","ENSSSAG00000116540", "ENSSSAG00000055826");print(look.up.table$gene.name[match(markers.t.gd,look.up.table$ensembl.id)])
+
+markers.ig <- c( "ENSSSAG00000048830", "ENSSSAG00000080049", "ENSSSAG00000116510", "ENSSSAG00000055328", "ENSSSAG00000009083", "ENSSSAG00000089454", "ENSSSAG00000108673",
+                 "ENSSSAG00000101162", "ENSSSAG00000002678", "ENSSSAG00000070948");print(look.up.table$gene.name[match(markers.ig,look.up.table$ensembl.id)])
+
+markers.b.immature <- c("ENSSSAG00000075916","ENSSSAG00000065644","ENSSSAG00000098654",
+                        "ENSSSAG00000042542","ENSSSAG00000075252",
+                        "ENSSSAG00000105878");print(look.up.table$gene.name[match(markers.b.immature,look.up.table$ensembl.id)])
+
+markers.epith <- c("ENSSSAG00000065688","ENSSSAG00000111544","ENSSSAG00000075108","ENSSSAG00000118160","ENSSSAG00000121005","ENSSSAG00000086639",
+                     "ENSSSAG00000116689");print(look.up.table$gene.name[match(markers.epith ,look.up.table$ensembl.id)])
+
+isav_markers <- c("seg1","seg2","seg3","seg4","seg5","seg6",
+                  "seg7ORF2","seg8ORF2");print(look.up.table$gene.name[match(isav_markers,look.up.table$ensembl.id)])
+
+cluster.markers <- list(
+  c("T_cells",markers.t),
+  c("gdT_cells",markers.t.gd),
+  c("Granu",markers.gra),
+  c("NK",markers.nk),
+  c("MPs",markers.mps),
+  c("Endo",markers.end),
+  c("Eryt_hb",markers.hemo),
+  c("Eryt_others",markers.othersRBC),
+  c("Thromb",markers.thr),
+  c("Plasma_cells",markers.ig),
+  c("HSC",markers.hsc),
+  c("Mesen",markers.mes),
+  c("B_cells",markers.b),
+  c("Inter", markers.int),
+  c("B_cells_immature",markers.b.immature),
+  c("Epith",markers.epith ))
+#,  c("Inf", isav_markers))
+
+#Store averages for each cell type in the meta data. Useful for plotting later when confirming doublets.
+for (entry in cluster.markers){
+  #Sometimes marker not in data e.g. if not of that cell type present at all. Deal with here.
+  present <- entry[-1] %in% rownames(integrate_noISAV@assays$RNA@data)
+  if (sum(!present) > 0){
+    print(paste0(entry[-1][!present], " not present in data (", entry[1],")"))
+  }
+  remaining.markers <- entry[-1][present]
+  integrate_noISAV@meta.data[entry[1]] = colMeans(integrate_noISAV@assays$RNA@data[remaining.markers,])
+}
+
+#Store names and lists of markers for use later
+cell.names <- c("B_cells","T_cells","gdT_cells","Granu","NK","MPs","Endo","Eryt_hb","Eryt_others",
+                "Thromb","HSC","Plasma_cells", "Mesen", "Inter","B_cells_immature",
+                "Epith")
+
+#Now annotate the high resolution clustering using the automated clustering function
+integrate_noISAV <- AnnotateClusters(object = integrate_noISAV,cluster.markers = cluster.markers,
+                            assay = "RNA",min.av.expr = 0.2,min.prop.markers = 0.5,
+                            resolution = 6,sds = 0.5,verbose = FALSE,dims =25)
+
+#Plot average expression of markers
+levels(integrate_noISAV) <- sort(levels(integrate_noISAV))
+VlnPlot(integrate_noISAV,features = sort(cell.names), slot = "data",assay = "RNA",
+        stack = TRUE, flip = TRUE,same.y.lims = TRUE, split.by="group", cols=col.dataset)
+VlnPlot(integrate_noISAV,features = sort(cell.names), slot = "data",assay = "RNA",
+        stack = TRUE, flip = TRUE,same.y.lims = TRUE, split.by="group2", cols=col.dataset2)
+
+#save.image("integrate_noISAVd_tilVlnplot.RData")
+#To know how many cells from each sample is in each cluster
+n_cells2 <- FetchData(integrate_noISAV,
+                     vars = c("ident","group2")) %>%
+  dplyr::count(ident,group2) %>%
+  tidyr::spread(ident,n)
+
+#Run cluster based doublet removal first to confirm potential doublet clusters from annotation step above
+tab <- findDoubletClusters(integrate_noISAV@assays$RNA@data, clusters = integrate_noISAV@active.ident,get.all.pairs = T)
+viewtab <- as.data.frame(tab)
+
+# Record end time
+end_time <- Sys.time()
+# Calculate elapsed time in seconds
+elapsed_time_seconds <- as.numeric(difftime(end_time, start_time, units = "min"))
+
+#Choose populations to remove with very low unique de genes
+to.remove <- rownames(tab)[tab$num.de < 0.05 * tab$median.de]
+print(to.remove)
+to.remove <- to.remove[!grepl(c("B_cells/B_cells_immature"),to.remove)] #Not pops potentially HSC - may be transitioning state
+to.remove <- to.remove[grepl("/",to.remove)] #Only pops annotated as potentially doublets above have "/" in name
+print(to.remove)
+
+#testing markers expression for bad populations
+test <- subset(integrate_noISAV,idents =  to.remove)
+UMAPPlot(test,label=T)&NoLegend()
+UMAPPlot(integrate_noISAV,label=T)&NoLegend()
+VlnPlot(test,features = sort(cell.names), slot = "data",assay = "RNA",
+        stack = TRUE, flip = TRUE,same.y.lims = TRUE, split.by = "group2", cols=col.dataset2) + NoLegend()
+#Check average values of cluster markers
+VlnPlot(test,features = markers.hemo, slot = "data",assay = "RNA",
+        stack = TRUE, flip = TRUE,same.y.lims = TRUE, split.by = "group2", cols=col.dataset2) + NoLegend()
+# #Restrict to only potential doublet pops i.e. / in name
+to.remove <- to.remove[!grepl("Thromb/HSC",to.remove)] #Only pops annotated as potentially doublets above have "/" in name
+print(to.remove)
+
+integrate_noISAV <- subset(integrate_noISAV, idents = to.remove, invert = TRUE)
+UMAPPlot(integrate_noISAV,label=T,repel=T)&NoLegend()
+#Plot average expression of markers
+levels(integrate_noISAV) <- sort(levels(integrate_noISAV))
+VlnPlot(integrate_noISAV,features = sort(cell.names), slot = "data",
+        assay = "RNA",stack = TRUE, flip = TRUE,same.y.lims = TRUE,
+        split.by = "group2", cols=col.dataset2) + NoLegend()
+
+#####Annotation was repeated every time we needed to exclude a cluster.
+integrate_beforerenaming <- integrate_fifthannot
+#integrate_noISAV <- integrate_beforerenaming
+levels(integrate_fifthannot)
+
+current.cluster.ids <- c("69","88","B_cells","B_cells/B_cells_immature",
+                         "B_cells_immature","Endo","Eryt_hb/Eryt_others",
+                         "Eryt_hb/Eryt_others/HSC","Eryt_hb/Thromb",
+                         "Eryt_others","Eryt_others/HSC","Granu",
+                         "Granu/Endo/Eryt_hb","Granu/HSC",
+                         "Granu/Plasma_cells/B_cells", "HSC","Inter","Mesen",
+                         "MPs","MPs/HSC","NK","Plasma_cells/B_cells","T_cells",
+                         "Thromb","Thromb/HSC") 
+
+new.cluster.ids <- c("HSC","MPs","B_cells","B_cells",
+                     "B_cells","Endo","Eryt",
+                     "Eryt","Thromb",
+                     "Eryt","Eryt","Granu",
+                     "Endo","Granu",
+                     "B_cells", "HSC","Inter","Mesen",
+                     "MPs","MPs","NK","B_cells","T_cells",
+                     "Thromb","Thromb")
+
+integrate_fifthannot@active.ident <- plyr::mapvalues(x = integrate_fifthannot@active.ident, from = current.cluster.ids, to = new.cluster.ids)
+
+my_colors <- c("MPs"='#619052', "B_cells"='#AAAA00', "Granu"='#77AADD',
+               "HSC"='#b57edc', "NK"='#ff5f15', "Thromb"='#99DDFF', "Eryt"='#fdbcb4', 
+               "T_cells"='#44BB99',"Inter"= '#DDDDDD',"Mesen"= '#ffff62',
+               "Epith"='#332288',"Endo" ='#d9596f',"flt3+" ='#0000ff', "Inf" = '#59d9c3')
+
+#adding cluster column
+integrate_fifthannot$cluster <- integrate_fifthannot@active.ident
+
+#Save UMAP
+int_fig <- UMAPPlot(integrate_fifthannot, 
+                     pt.size=0.5,
+                     label = TRUE, 
+                     repel=T, 
+                     label.size = 5,
+                     cols= my_colors) & NoLegend()
+#,split.by = "group2",ncol=2
+int_fig
+ggsave(file = (here::here("test_integration","results_JAN24","All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis","ISAVEXCLUDED_MAYintegrateUMAP.svg")),plot = int_fig,
+       width = 300,height = 300,units = "mm")
+
+int_fig2 <- UMAPPlot(integrate_fifthannot, 
+                    pt.size=0.5,
+                    label = TRUE, 
+                    repel=T, 
+                    label.size = 5,
+                    cols= my_colors,split.by = "group",ncol=3) & NoLegend()
+int_fig2
+
+ggsave(file = (here::here("test_integration","results_JAN24","All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis","ISAVEXCLUDED_MAYintegrateUMAPsplit.svg")),plot = int_fig,
+       width = 300,height = 300,units = "mm")
+
+#saving markers table with the clusters names
+markers <- FindAllMarkers(integrate_fifthannot, logfc.threshold = 0.5,only.pos = T,min.pct = 0.2,
+                          assay = "RNA",
+                          verbose = F)
+markers$gene.name <- look.up.table$gene.name[match(markers$gene,look.up.table$ensembl.id)]
+markers$product <- look.up.table$ncbi.product[match(markers$gene,look.up.table$ensembl.id)]
+markers$diff <- markers$pct.1 - markers$pct.2
+markers <- markers[,c(1:4,10,5:9)]
+markers.significant <- markers[markers$p_val_adj < 0.05,]
+
+# Create a new column combining cluster and day
+integrate_fifthannot$cluster_group <- paste(integrate_fifthannot$cluster, integrate_fifthannot$group, sep = "_")
+
+#Adding log average expression on the markers sheet
+int.avg <- AverageExpression(object = integrate_fifthannot, assays = 'RNA',slot = "data",
+                             group.by = "cluster_group",  return.seurat = T)
+int.avg <- as.data.frame(int.avg@assays[["RNA"]]@data)
+int.avg <- round(int.avg, digits = 3)
+int.avg <- rownames_to_column(int.avg, var = "gene")
+int.avgMarker<- inner_join(markers.significant, int.avg, by = "gene")
+
+#adding a column to identify group
+analysis = "integrate"
+int.avgMarker$analysis <- analysis
+int.avgMarker <- as.data.frame(int.avgMarker)
+write.csv(int.avgMarker, file = (here::here("test_integration","results_JAN24","All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis","ISAVEXCLUDED_MAYint.avgMarker.csv")))
+
+#To know how many cells from each sample is in each cluster
+n_cells <- FetchData(integrate_fifthannot,
+                     vars = c("condition","dataset")) %>%
+  dplyr::count(condition,dataset) %>%
+  tidyr::spread(condition,n)
+write.csv(n_cells, file = (here::here("test_integration","results_JAN24",
+                                      "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis","ISAVEXCLUDED_MAYIntegrated_n_cellsCONDITION.csv")))
+
+n_cells <- FetchData(integrate_fifthannot,
+                     vars = c("cluster","dataset")) %>%
+  dplyr::count(cluster,dataset) %>%
+  tidyr::spread(cluster,n)
+write.csv(n_cells, file = (here::here("test_integration","results_JAN24",
+                                      "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis","ISAVEXCLUDED_MAYIntegrated_n_cellsCLUSTER.csv")))
+
+n_cells2 <- FetchData(integrate_fifthannot,
+                      vars = c("cluster","group2")) %>%
+  dplyr::count(cluster,group2) %>%
+  tidyr::spread(cluster,n)
+write.csv(n_cells2, file = (here::here("test_integration","results_JAN24",
+                                       "All_samples_Int","ISAVEXCLUDED_May_2024_reanalysis","ISAVEXCLUDED_MAYIntegrated_n_cellsCLUSTERxgroup2.csv")))
