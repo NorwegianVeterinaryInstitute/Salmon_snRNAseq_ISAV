@@ -1,0 +1,49 @@
+#Load Seurat objects for snrNAseq data set from 2022 trial (="Virus inclusive HK")
+HK_VirusINC <- readRDS("/home/vetinst.no/vi2167/High_low/Output/results/plot_highlowsc/Virus_inclusiveRDS/ISAVEXCLUDED_MAYintegrate2.RDS")
+Endo_VirusINC <- readRDS("/home/vetinst.no/vi2167/High_low/Output/results/plot_highlowsc/Virus_inclusiveRDS/ISAVEXCLUDED_MAYres01_ENDOsub.RDS")
+
+# Load libraries
+library(dplyr)
+library(plyr)
+library(Matrix)
+library(cowplot)
+library(Seurat)
+library(tidyverse)
+library (here)
+library(svglite)
+library(ggplot2)
+
+set.seed(123)
+
+#Load tables and/or functions needed to run the script--------
+#Look up table is used to get the gene.names for the ensembl.id.
+look.up.table <- read.csv(here::here("Datascript","s_salar_ensembl_106_gene_data_added_ISAV.csv"),header = T)
+
+# load gene lists based on top markers of the ENDO subsets only found in infected fish
+#marker genes shared by 2022 E3 and E5 top 15 by smallest p-value
+genesCOM <-c("ENSSSAG00000000402","ENSSSAG00000107768","ENSSSAG00000038498","ENSSSAG00000087160","ENSSSAG00000096238","ENSSSAG00000046981","ENSSSAG00000078539","ENSSSAG00000118579","ENSSSAG00000060007","ENSSSAG00000104513","ENSSSAG00000004437","ENSSSAG00000044215","ENSSSAG00000003672","ENSSSAG00000077480","ENSSSAG00000105262")
+#top 15 markers of E3 by smallest p-value (excluding those shared by E5)
+genesBY <-c("ENSSSAG00000110880","ENSSSAG00000008371","ENSSSAG00000052984","ENSSSAG00000073332","ENSSSAG00000038733","ENSSSAG00000045256","ENSSSAG00000054237","ENSSSAG00000119316","ENSSSAG00000044822","ENSSSAG00000106328","ENSSSAG00000044071","ENSSSAG00000069083","ENSSSAG00000054169","ENSSSAG00000074112","ENSSSAG00000119912")
+#top 15 markers of E5 by smallest p-value (excluding those shared by E3)
+genesINF <-c("ENSSSAG00000110985","ENSSSAG00000120159","ENSSSAG00000071237","ENSSSAG00000057070","ENSSSAG00000058660","ENSSSAG00000037616","ENSSSAG00000007639","ENSSSAG00000088750","ENSSSAG00000063523","ENSSSAG00000091114","ENSSSAG00000084959","ENSSSAG00000078883","ENSSSAG00000068972","ENSSSAG00000004760","ENSSSAG00000076115")
+  
+# making heatmaps for common genes, first one where expression is scaled by row, next one where the log-expression values are shown unscaled
+Endo_VirusINC_HKavg_expCOM <- AverageExpression(Endo_VirusINC, features = genesCOM, return.seurat = FALSE)$RNA
+rownames(Endo_VirusINC_HKavg_expCOM) <- look.up.table$gene.name[match(rownames(Endo_VirusINC_HKavg_expCOM), look.up.table$ensembl.id)]
+Endo_VirusINC_HKheatCOM <- pheatmap::pheatmap(Endo_VirusINC_HKavg_expCOM, scale = "row", cluster_rows = F, cluster_cols = F)
+Endo_VirusINC_HKavg_expCOM_log <- log1p(Endo_VirusINC_HKavg_expCOM)
+Endo_VirusINC_HKheatCOM2 <- pheatmap::pheatmap(Endo_VirusINC_HKavg_expCOM_log, scale = "none", cluster_rows = F, cluster_cols = F)
+  
+# making heatmaps for bystander markers, first one where expression is scaled by row, next one where the log-expression values are shown unscaled
+Endo_VirusINC_HKavg_expBY <- AverageExpression(Endo_VirusINC, features = genesBY, return.seurat = FALSE)$RNA
+rownames(Endo_VirusINC_HKavg_expBY) <- look.up.table$gene.name[match(rownames(Endo_VirusINC_HKavg_expBY), look.up.table$ensembl.id)]
+Endo_VirusINC_HKheatBY <- pheatmap::pheatmap(Endo_VirusINC_HKavg_expBY, scale = "row", cluster_rows = F, cluster_cols = F)
+Endo_VirusINC_HKavg_expBY_log <- log1p(Endo_VirusINC_HKavg_expBY)
+Endo_VirusINC_HKheatBY2 <- pheatmap::pheatmap(Endo_VirusINC_HKavg_expBY_log, scale = "none", cluster_rows = F, cluster_cols = F)
+  
+# making heatmaps for markers of directly infected endothelial cells, first one where expression is scaled by row, next one where the log-expression values are shown unscaled
+Endo_VirusINC_HKavg_expINF <- AverageExpression(Endo_VirusINC, features = genesINF, return.seurat = FALSE)$RNA
+rownames(Endo_VirusINC_HKavg_expINF) <- look.up.table$gene.name[match(rownames(Endo_VirusINC_HKavg_expINF), look.up.table$ensembl.id)]
+Endo_VirusINC_HKheatINF <- pheatmap::pheatmap(Endo_VirusINC_HKavg_expINF, scale = "row", cluster_rows = F, cluster_cols = F)
+Endo_VirusINC_HKavg_expINF_log <- log1p(Endo_VirusINC_HKavg_expINF)
+Endo_VirusINC_HKheatINF2 <- pheatmap::pheatmap(Endo_VirusINC_HKavg_expINF_log, scale = "none", cluster_rows = F, cluster_cols = F)
